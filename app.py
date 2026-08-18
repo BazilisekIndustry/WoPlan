@@ -6,7 +6,7 @@ from repositories.supabase_repo import client, update_schedule_atomically
 from services.calendars import calculate_delay_workdays, calculate_task_end, next_working_day
 from services.capacity import monthly_capacity_hours, planned_hours_in_month
 from services.conflicts import conflicts
-from services.scheduling import dependency_start, move_task
+from services.scheduling import dependency_start, move_task, revise_task
 from services.projects import current_project_end, project_deadline_delay
 
 st.set_page_config(page_title="Project Planner", layout="wide")
@@ -22,7 +22,8 @@ def domain(workplace_rows, task_rows, dependency_rows):
 
 st.title("PROJECT PLANNER")
 try:
-    db = client(st.session_state.get("access_token"), st.session_state.get("refresh_token")); session = db.auth.get_session().session
+    db = client(st.session_state.get("access_token"), st.session_state.get("refresh_token"))
+    session = db.auth.get_session()
 except RuntimeError:
     st.info("Doplňte SUPABASE_URL a SUPABASE_ANON_KEY do `.env` nebo Streamlit secrets."); st.stop()
 if not session:
@@ -88,6 +89,30 @@ elif page == "Krátkodobý HMG":
                     if st.form_submit_button("Uložit název / ZT"):
                         try: update_task_metadata(db, row["id"], {"name": name, "zt_count": int(zt), "updated_by": session.user.id}); st.rerun()
                         except Exception as error: fail(error)
+                st.caption("Změna délky nebo pracoviště ovlivní termíny a před potvrzením se zobrazí náhled.")
+                revision_key = f"revision-{row['id']}"; work_names = {w.name: w.id for w in workplaces.values()}
+                rev_start = st.date_input("Nový plánovaný start", task_start, key=f"rev-start-{row['id']}")
+                rev_duration = st.number_input("Nová délka (pracovní dny)", 1, value=int(row["duration_workdays"]), key=f"rev-duration-{row['id']}")
+                current_work_name = next(w.name for w in workplaces.values() if w.id == row["workplace_id"])
+                rev_work_name = st.selectbox("Nové pracoviště", list(work_names), index=list(work_names).index(current_work_name), key=f"rev-work-{row['id']}")
+                if st.button("Zobrazit náhled změny", key=f"preview-revision-{row['id']}"):
+                    st.session_state[revision_key] = {"start": rev_start.isoformat(), "duration": int(rev_duration), "workplace_id": work_names[rev_work_name]}
+                if revision_key in st.session_state:
+                    revision = st.session_state[revision_key]
+                    try:
+                        proposal = revise_task(tasks, dependencies, workplaces, row["id"], revision["duration"], revision["workplace_id"], date.fromisoformat(revision["start"]))
+                        original = {t.id: t for t in tasks}; changed = [t for t in proposal if t != original[t.id]]
+                        st.dataframe([{"Úloha":t.name,"Původní konec":original[t.id].planned_end,"Nový konec":t.planned_end,"Pracoviště":next(w.name for w in workplaces.values() if w.id == t.workplace_id)} for t in changed], hide_index=True)
+                        if conflicts(proposal): st.warning("Náhled obsahuje kolize. Konflikt lze po potvrzení vědomě ponechat.")
+                        if st.button("Potvrdit změnu plánování", type="primary", key=f"apply-revision-{row['id']}"):
+                            ids={str(t.id) for t in changed}; payload=[]
+                            for t in changed:
+                                item={"id":str(t.id),"planned_start":t.planned_start.isoformat(),"planned_end":t.planned_end.isoformat()}
+                                if t.id == row["id"]: item.update({"duration_workdays":t.duration_workdays,"workplace_id":str(t.workplace_id)})
+                                payload.append(item)
+                            expected={str(r["id"]):r["updated_at"] for r in task_rows if str(r["id"]) in ids}
+                            update_schedule_atomically(db,payload,expected); st.session_state.pop(revision_key, None); st.success("Změna byla atomicky uložena."); st.rerun()
+                    except Exception as error: fail(error)
 
 elif page == "Dlouhodobý výhled":
     st.header("Dlouhodobý výhled"); year=int(st.number_input("Rok",2000,2200,today.year)); head=st.columns(13); head[0].markdown("**Pracoviště**")

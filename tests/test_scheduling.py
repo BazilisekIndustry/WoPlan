@@ -4,7 +4,7 @@ from models.domain import Dependency, Task, Workplace
 from services.calendars import add_working_days, calculate_delay_workdays, calculate_task_end, next_working_day
 from services.capacity import monthly_capacity_hours, planned_hours_in_month
 from services.conflicts import conflicts
-from services.scheduling import CircularDependencyError, dependency_start, move_task, validate_acyclic
+from services.scheduling import CircularDependencyError, dependency_start, move_task, revise_task, validate_acyclic
 from services.projects import current_project_end, project_deadline_delay
 
 WEEKDAY = Workplace("w1", "Chamber", 8, frozenset(range(5)))
@@ -57,3 +57,9 @@ def test_project_deadline_calculation_ignores_cancelled_tasks():
     a = task("a", start=date(2026, 8, 3)); b = task("b", start=date(2026, 8, 17))
     assert current_project_end([a, b]) == date(2026, 8, 21)
     assert project_deadline_delay([a, b], date(2026, 8, 14), {"w1": WEEKDAY}) == 5
+
+def test_duration_revision_recalculates_end_and_downstream_branch():
+    a = task("a", start=date(2026, 8, 3), duration=5); b = task("b", start=date(2026, 8, 14))
+    revised = {t.id: t for t in revise_task([a, b], [Dependency("a", "b")], {"w1": WEEKDAY}, "a", 7, "w1", a.planned_start)}
+    assert revised["a"].planned_end == date(2026, 8, 11)
+    assert revised["b"].planned_start == date(2026, 8, 18)

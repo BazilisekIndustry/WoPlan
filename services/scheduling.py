@@ -54,3 +54,35 @@ def move_task(tasks: list[Task], dependencies: list[Dependency], workplaces: dic
         moved[current_id] = replace(current, planned_start=start, planned_end=end)
         queue.extend(children[current_id])
     return [moved[t.id] for t in tasks]
+
+
+def revise_task(tasks: list[Task], dependencies: list[Dependency], workplaces: dict[object, Workplace], task_id: object,
+                duration_workdays: int, workplace_id: object, planned_start: date) -> list[Task]:
+    """Preview a duration/workplace revision and consistently shift its downstream branch.
+
+    The root gets its new workplace calendar and duration; descendants retain their
+    relative placement by the resulting working-day delta on their own calendars.
+    """
+    validate_acyclic(tasks, dependencies)
+    by_id = {task.id: task for task in tasks}
+    if task_id not in by_id or workplace_id not in workplaces:
+        raise ValueError("Task or workplace not found.")
+    old = by_id[task_id]; root_wp = workplaces[workplace_id]
+    start = next_working_day(planned_start, root_wp)
+    end = calculate_task_end(start, duration_workdays, root_wp)
+    delta = working_days_between(old.planned_end, end, root_wp, inclusive=False)
+    revised = move_task(tasks, dependencies, workplaces, task_id, start)
+    result = {task.id: task for task in revised}
+    result[task_id] = replace(result[task_id], workplace_id=workplace_id, duration_workdays=duration_workdays, planned_start=start, planned_end=end)
+    # Reapply downstream offset using the end-date impact, not root start impact.
+    children = defaultdict(list)
+    for dep in dependencies: children[dep.predecessor_task_id].append(dep.successor_task_id)
+    queue = deque(children[task_id]); seen = set()
+    while queue:
+        current_id = queue.popleft()
+        if current_id in seen: continue
+        seen.add(current_id); current = result[current_id]; wp = workplaces[current.workplace_id]
+        start = add_working_days(by_id[current_id].planned_start, delta, wp)
+        result[current_id] = replace(current, planned_start=start, planned_end=calculate_task_end(start, current.duration_workdays, wp))
+        queue.extend(children[current_id])
+    return [result[task.id] for task in tasks]

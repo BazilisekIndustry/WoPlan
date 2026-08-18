@@ -14,7 +14,9 @@ begin
   end loop;
   for item in select value from jsonb_array_elements(p_changes) loop
     select * into current_task from public.tasks where id = (item->>'id')::uuid;
-    update public.tasks set planned_start=(item->>'planned_start')::date, planned_end=(item->>'planned_end')::date, updated_by=auth.uid()
+    update public.tasks set planned_start=(item->>'planned_start')::date, planned_end=(item->>'planned_end')::date,
+      duration_workdays=coalesce((item->>'duration_workdays')::integer, duration_workdays),
+      workplace_id=coalesce((item->>'workplace_id')::uuid, workplace_id), updated_by=auth.uid()
       where id=current_task.id;
     -- General task audit trigger records the before/after row in the same transaction.
   end loop;

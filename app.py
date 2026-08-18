@@ -11,6 +11,12 @@ from services.projects import current_project_end, project_deadline_delay
 
 st.set_page_config(page_title="Project Planner", layout="wide")
 
+def streamlit_secret(name: str) -> str | None:
+    try:
+        return st.secrets.get(name)
+    except FileNotFoundError:
+        return None
+
 def fail(error):
     st.error("Jiný uživatel mezitím plán změnil. Obnovte stránku a zkuste to znovu." if "STALE_SCHEDULE" in str(error) else "Změnu se nepodařilo uložit. Žádné změny nebyly provedeny.")
 
@@ -22,7 +28,12 @@ def domain(workplace_rows, task_rows, dependency_rows):
 
 st.title("PROJECT PLANNER")
 try:
-    db = client(st.session_state.get("access_token"), st.session_state.get("refresh_token"))
+    db = client(
+        access_token=st.session_state.get("access_token"),
+        refresh_token=st.session_state.get("refresh_token"),
+        url=streamlit_secret("SUPABASE_URL"),
+        key=streamlit_secret("SUPABASE_ANON_KEY"),
+    )
     session = db.auth.get_session()
 except RuntimeError:
     st.info("Doplňte SUPABASE_URL a SUPABASE_ANON_KEY do `.env` nebo Streamlit secrets."); st.stop()

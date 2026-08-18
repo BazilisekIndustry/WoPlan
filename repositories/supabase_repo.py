@@ -9,8 +9,10 @@ from supabase import Client, create_client
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
-def client(access_token: str | None = None, refresh_token: str | None = None) -> Client:
-    url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_ANON_KEY")
+def client(access_token: str | None = None, refresh_token: str | None = None,
+           url: str | None = None, key: str | None = None) -> Client:
+    url = url or os.environ.get("SUPABASE_URL")
+    key = key or os.environ.get("SUPABASE_ANON_KEY")
     if not url or not key: raise RuntimeError("SUPABASE_URL and SUPABASE_ANON_KEY must be configured.")
     db = create_client(url, key)
     if access_token and refresh_token: db.auth.set_session(access_token, refresh_token)

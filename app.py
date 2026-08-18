@@ -31,7 +31,12 @@ def fail(error):
         st.error("Hodnoty neodpovídají pravidlům databáze. Zkontrolujte délku, ZT, hodiny a pracovní dny.")
     else:
         st.error("Změnu se nepodařilo uložit. Žádné změny nebyly provedeny.")
-        st.caption("Pokud problém přetrvá, zkontrolujte v Supabase Dashboard → Logs → Postgres konkrétní chybu v čase odeslání formuláře.")
+    # Database error detail is useful to an administrator and contains no credentials or traceback.
+    if globals().get("role") == "admin":
+        error_code = getattr(error, "code", None)
+        error_message = getattr(error, "message", None) or str(error)
+        with st.expander("Technický detail pro správce"):
+            st.code(f"{error_code or 'bez kódu'}: {error_message}")
 
 def domain(workplace_rows, task_rows, dependency_rows):
     workplaces = {r["id"]: Workplace(r["id"], r["name"], float(r["hours_per_workday"]), frozenset(r["working_days"])) for r in workplace_rows}

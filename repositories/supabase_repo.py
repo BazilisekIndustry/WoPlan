@@ -1,10 +1,12 @@
 from __future__ import annotations
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
 
-load_dotenv()
+# Streamlit can be launched from a different current directory; resolve project .env explicitly.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 
 def client(access_token: str | None = None, refresh_token: str | None = None) -> Client:

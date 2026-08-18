@@ -8,6 +8,19 @@ def list_workplaces(db: Client) -> list[dict]:
     return db.table("workplaces").select("*").eq("active", True).order("name").execute().data
 
 
+def list_all_workplaces(db: Client) -> list[dict]:
+    return db.table("workplaces").select("*").order("active", desc=True).order("name").execute().data
+
+
+def create_workplace(db: Client, values: dict) -> dict:
+    return db.table("workplaces").insert(values).execute().data[0]
+
+
+def set_workplace_active(db: Client, workplace_id: str, active: bool) -> None:
+    """Deactivate/reactivate only; do not delete workplaces with historical tasks."""
+    db.table("workplaces").update({"active": active}).eq("id", workplace_id).execute()
+
+
 def list_projects(db: Client) -> list[dict]:
     return db.table("projects").select("*").order("project_number").execute().data
 

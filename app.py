@@ -1,7 +1,7 @@
 from datetime import date, datetime, timedelta
 import streamlit as st
 from models.domain import Dependency, Task, Workplace
-from repositories.planner import create_dependency, create_project, create_task, list_dependencies, list_projects, list_tasks, list_workplaces, update_task_metadata, update_task_status
+from repositories.planner import create_dependency, create_project, create_task, create_workplace, list_all_workplaces, list_dependencies, list_projects, list_tasks, list_workplaces, set_workplace_active, update_task_metadata, update_task_status
 from repositories.supabase_repo import client, update_schedule_atomically
 from services.calendars import calculate_delay_workdays, calculate_task_end, next_working_day
 from services.capacity import monthly_capacity_hours, planned_hours_in_month
@@ -53,7 +53,10 @@ except Exception:
     st.error("Data se nepodařilo načíst. Zkontrolujte migrace, RLS a profil uživatele."); st.stop()
 workplaces, tasks, dependencies = domain(workplace_rows, task_rows, dependency_rows); today = date.today()
 conflict_list = conflicts(tasks); conflict_ids = {str(x.first_task_id) for x in conflict_list} | {str(x.second_task_id) for x in conflict_list}
-st.sidebar.caption(f"Role: **{role}**"); page = st.sidebar.radio("Navigace", ["Dashboard", "Krátkodobý HMG", "Dlouhodobý výhled", "Projekty"])
+st.sidebar.caption(f"Role: **{role}**")
+navigation = ["Dashboard", "Krátkodobý HMG", "Dlouhodobý výhled", "Projekty"]
+if role == "admin": navigation.append("Pracoviště")
+page = st.sidebar.radio("Navigace", navigation)
 if st.sidebar.button("Odhlásit"): db.auth.sign_out(); st.session_state.clear(); st.rerun()
 
 if page == "Dashboard":
@@ -134,7 +137,7 @@ elif page == "Dlouhodobý výhled":
             capacity=monthly_capacity_hours(workplace,year,month); planned=planned_hours_in_month(tasks,workplace,year,month); usage=100*planned/capacity if capacity else 0; cells[month].markdown(f"{'🔴' if usage>110 else '🟠' if usage>100 else '🟡' if usage>=80 else '🟢'} {usage:.0f}%")
     st.caption("🟢 0–79 % · 🟡 80–100 % · 🟠 100–110 % · 🔴 více než 110 %")
 
-else:
+elif page == "Projekty":
     st.header("Projekty")
     if role == "admin":
         with st.expander("+ Nový projekt"):
@@ -169,3 +172,48 @@ else:
             deadline = date.fromisoformat(selected["planned_end"]); delay = project_deadline_delay(project_tasks, deadline, workplaces)
             z.metric("Zpoždění projektu", f"{delay} pracovních dnů" if delay else "V termínu")
         st.dataframe([{"Úloha":t.name,"Pracoviště":next(w.name for w in workplaces.values() if w.id == t.workplace_id),"Start":t.planned_start,"Konec":t.planned_end,"Stav":t.status} for t in project_tasks],hide_index=True,use_container_width=True)
+
+else:
+    # This route is added to navigation only for administrators. RLS remains the enforcement layer.
+    st.header("Pracoviště")
+    st.caption("Pracoviště se nikdy nemažou. Deaktivace je skryje z nových úloh, ale zachová historii a integritu dat.")
+    try:
+        all_workplaces = list_all_workplaces(db)
+    except Exception as error:
+        fail(error); st.stop()
+    with st.expander("+ Přidat pracoviště", expanded=not all_workplaces):
+        with st.form("new-workplace", clear_on_submit=True):
+            name = st.text_input("Název *")
+            description = st.text_area("Popis")
+            hours = st.number_input("Hodin za pracovní den *", min_value=0.25, value=8.0, step=0.25)
+            selected_days = st.multiselect("Pracovní dny *", ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek", "Sobota", "Neděle"], default=["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek"])
+            annual_capacity = st.number_input("Roční kapacita hodin (volitelné)", min_value=0.0, value=0.0, step=1.0)
+            if st.form_submit_button("Přidat pracoviště", type="primary"):
+                if not name.strip() or not selected_days:
+                    st.error("Vyplňte název a alespoň jeden pracovní den.")
+                else:
+                    try:
+                        day_values = {"Pondělí": 0, "Úterý": 1, "Středa": 2, "Čtvrtek": 3, "Pátek": 4, "Sobota": 5, "Neděle": 6}
+                        create_workplace(db, {"name": name.strip(), "description": description.strip() or None, "hours_per_workday": hours, "working_days": [day_values[day] for day in selected_days], "annual_capacity_hours": annual_capacity or None, "active": True})
+                        st.success("Pracoviště bylo přidáno."); st.rerun()
+                    except Exception as error: fail(error)
+    day_names = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"]
+    st.subheader("Aktivní")
+    active_rows = [workplace for workplace in all_workplaces if workplace["active"]]
+    st.dataframe([{"Název": w["name"], "Popis": w["description"] or "", "Hodiny/den": w["hours_per_workday"], "Pracovní dny": ", ".join(day_names[day] for day in w["working_days"]), "Roční kapacita": w["annual_capacity_hours"] or "—"} for w in active_rows], hide_index=True, use_container_width=True)
+    for workplace in active_rows:
+        if st.button(f"Deaktivovat: {workplace['name']}", key=f"deactivate-{workplace['id']}"):
+            try:
+                set_workplace_active(db, workplace["id"], False)
+                st.success(f"Pracoviště {workplace['name']} bylo deaktivováno."); st.rerun()
+            except Exception as error: fail(error)
+    inactive_rows = [workplace for workplace in all_workplaces if not workplace["active"]]
+    if inactive_rows:
+        st.subheader("Neaktivní")
+        st.dataframe([{"Název": w["name"], "Popis": w["description"] or "", "Hodiny/den": w["hours_per_workday"], "Pracovní dny": ", ".join(day_names[day] for day in w["working_days"])} for w in inactive_rows], hide_index=True, use_container_width=True)
+        for workplace in inactive_rows:
+            if st.button(f"Znovu aktivovat: {workplace['name']}", key=f"activate-{workplace['id']}"):
+                try:
+                    set_workplace_active(db, workplace["id"], True)
+                    st.success(f"Pracoviště {workplace['name']} je znovu aktivní."); st.rerun()
+                except Exception as error: fail(error)

@@ -18,7 +18,20 @@ def streamlit_secret(name: str) -> str | None:
         return None
 
 def fail(error):
-    st.error("Jiný uživatel mezitím plán změnil. Obnovte stránku a zkuste to znovu." if "STALE_SCHEDULE" in str(error) else "Změnu se nepodařilo uložit. Žádné změny nebyly provedeny.")
+    message = str(error).lower()
+    if "stale_schedule" in message:
+        st.error("Jiný uživatel mezitím plán změnil. Obnovte stránku a zkuste to znovu.")
+    elif "row-level security" in message or "permission denied" in message:
+        st.error("Supabase zápis odmítl. Zkontrolujte, že je váš profil v `public.profiles` opravdu ve roli `admin`.")
+    elif "foreign key" in message:
+        st.error("Vybraný projekt nebo pracoviště už není dostupné. Obnovte stránku a vyberte jej znovu.")
+    elif "duplicate key" in message or "unique" in message:
+        st.error("Záznam s touto hodnotou již existuje. Použijte jiný název nebo číslo projektu.")
+    elif "check constraint" in message or "violates check" in message:
+        st.error("Hodnoty neodpovídají pravidlům databáze. Zkontrolujte délku, ZT, hodiny a pracovní dny.")
+    else:
+        st.error("Změnu se nepodařilo uložit. Žádné změny nebyly provedeny.")
+        st.caption("Pokud problém přetrvá, zkontrolujte v Supabase Dashboard → Logs → Postgres konkrétní chybu v čase odeslání formuláře.")
 
 def domain(workplace_rows, task_rows, dependency_rows):
     workplaces = {r["id"]: Workplace(r["id"], r["name"], float(r["hours_per_workday"]), frozenset(r["working_days"])) for r in workplace_rows}

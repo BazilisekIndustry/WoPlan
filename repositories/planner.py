@@ -39,7 +39,10 @@ def create_project(db: Client, values: dict) -> dict:
 
 
 def create_task(db: Client, values: dict) -> dict:
-    return db.table("tasks").insert(values).execute().data[0]
+    response = db.table("tasks").insert(values).execute()
+    if not response.data:
+        raise RuntimeError("Supabase nepotvrdil vytvoření úlohy návratovými daty.")
+    return response.data[0]
 
 
 def create_dependency(db: Client, values: dict) -> dict:

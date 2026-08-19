@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+import logging
 import streamlit as st
 from models.domain import Dependency, Task, Workplace
 from repositories.planner import create_dependency, create_project, create_task, create_workplace, list_all_workplaces, list_dependencies, list_projects, list_tasks, list_workplaces, set_workplace_active, update_task_metadata, update_task_status
@@ -10,6 +11,7 @@ from services.scheduling import dependency_start, move_task, revise_task
 from services.projects import current_project_end, project_deadline_delay
 
 st.set_page_config(page_title="Project Planner", layout="wide")
+logger = logging.getLogger(__name__)
 
 def streamlit_secret(name: str) -> str | None:
     try:
@@ -18,6 +20,7 @@ def streamlit_secret(name: str) -> str | None:
         return None
 
 def fail(error):
+    logger.exception("Supabase operation failed", exc_info=error)
     message = str(error).lower()
     if "stale_schedule" in message:
         st.error("Jiný uživatel mezitím plán změnil. Obnovte stránku a zkuste to znovu.")
@@ -36,7 +39,7 @@ def fail(error):
         error_code = getattr(error, "code", None)
         error_message = getattr(error, "message", None) or str(error)
         with st.expander("Technický detail pro správce"):
-            st.code(f"{error_code or 'bez kódu'}: {error_message}")
+            st.code(f"typ: {type(error).__name__}\nkód: {error_code or 'bez kódu'}\nzpráva: {error_message!r}")
 
 def domain(workplace_rows, task_rows, dependency_rows):
     workplaces = {r["id"]: Workplace(r["id"], r["name"], float(r["hours_per_workday"]), frozenset(r["working_days"])) for r in workplace_rows}

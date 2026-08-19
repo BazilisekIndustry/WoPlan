@@ -167,7 +167,9 @@ elif page == "Projekty":
         with st.expander("+ Nová úloha"):
             pmap={f"{p['project_number']} – {p['name']}":p["id"] for p in projects}; wmap={w.name:w.id for w in workplaces.values()}
             with st.form("new-task"):
-                project=st.selectbox("Projekt",pmap); name=st.text_input("Název úlohy"); work=st.selectbox("Pracoviště",wmap); duration=st.number_input("Délka (pracovní dny)",1,value=1); zt=st.number_input("ZT",0,value=0); start=st.date_input("Začátek",today); predecessor=st.selectbox("Navázat na",{"Bez závislosti":None,**{t.name:t.id for t in task_rows}}); offset=st.number_input("Odstup",0,value=3)
+                project=st.selectbox("Projekt",pmap); name=st.text_input("Název úlohy"); work=st.selectbox("Pracoviště",wmap); duration=st.number_input("Délka (pracovní dny)",1,value=1); zt=st.number_input("ZT",0,value=0); start=st.date_input("Začátek",today)
+                predecessor_options = {"Bez závislosti": None, **{f"{t['projects']['project_number']} · {t['name']} ({t['planned_end']})": t["id"] for t in task_rows}}
+                predecessor=st.selectbox("Navázat na", predecessor_options); offset=st.number_input("Odstup",0,value=3)
                 if st.form_submit_button("Vytvořit úlohu"):
                     try:
                         wp=workplaces[wmap[work]]

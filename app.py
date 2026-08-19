@@ -99,14 +99,14 @@ elif page == "Krátkodobý HMG":
         for cell, day in zip(cells[1:], days): cell.markdown("🟥" if str(row["id"]) in conflict_ids and task_start <= day <= task_end else "🟦" if task_start <= day <= task_end else "")
         if role == "admin":
             action_a, action_b, action_c = st.columns([1, 1, 5])
-            if row["status"] == "planned" and action_a.button("Zahájit", key=f"start-{row['id']}"):
+            if row["status"] == "planned" and action_a.button("Zahájit", key=f"action-start-{row['id']}"):
                 try: update_task_status(db, row["id"], {"status": "in_progress", "actual_start": datetime.now().astimezone().isoformat(), "updated_by": session.user.id}); st.rerun()
                 except Exception as error: fail(error)
             if row["status"] == "in_progress" and action_b.button("Dokončit", key=f"complete-{row['id']}"):
                 try: update_task_status(db, row["id"], {"status": "completed", "actual_end": datetime.now().astimezone().isoformat(), "updated_by": session.user.id}); st.rerun()
                 except Exception as error: fail(error)
             with st.expander(f"Přesun: {row['name']}"):
-                new_start = st.date_input("Nový start", task_start, key=f"start-{row['id']}")
+                new_start = st.date_input("Nový start", task_start, key=f"move-date-{row['id']}")
                 if new_start != task_start:
                     try:
                         proposal = move_task(tasks, dependencies, workplaces, row["id"], new_start); original = {t.id:t for t in tasks}; changed = [t for t in proposal if t.planned_start != original[t.id].planned_start]

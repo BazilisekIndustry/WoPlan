@@ -3,7 +3,7 @@ import pytest
 from models.domain import Dependency, Task, Workplace
 from services.calendars import add_working_days, calculate_delay_workdays, calculate_task_end, next_working_day
 from services.capacity import monthly_capacity_hours, planned_hours_in_month
-from services.conflicts import conflicts
+from services.conflicts import conflicts, first_available_start
 from services.scheduling import CircularDependencyError, dependency_start, move_task, revise_task, validate_acyclic
 from services.projects import current_project_end, project_deadline_delay
 
@@ -42,6 +42,11 @@ def test_cycle_rejected():
 def test_conflicts_only_same_workplace():
     a = task("a", start=date(2026,8,3)); b = task("b", start=date(2026,8,5)); c = task("c", workplace="w2", start=date(2026,8,5))
     assert len(conflicts([a,b,c])) == 1
+
+def test_first_available_start_skips_full_conflicting_duration():
+    blocker = task("blocker", start=date(2026, 8, 3), duration=5)
+    moving = task("moving", start=date(2026, 8, 3), duration=3, project="p2")
+    assert first_available_start(moving, date(2026, 8, 3), WEEKDAY, [blocker, moving]) == date(2026, 8, 10)
 
 def test_propagation_can_create_cross_project_conflict():
     a = task("a", start=date(2026,8,3)); b = task("b", start=date(2026,8,12)); blocker = task("x", start=date(2026,8,17), project="p2")

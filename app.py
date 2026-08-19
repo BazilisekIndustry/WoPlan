@@ -6,7 +6,7 @@ from repositories.planner import create_dependency, create_project, create_task,
 from repositories.supabase_repo import client, update_schedule_atomically
 from services.calendars import calculate_delay_workdays, calculate_task_end, next_working_day
 from services.capacity import monthly_capacity_hours, planned_hours_in_month
-from services.conflicts import conflicts
+from services.conflicts import conflicts, first_available_start
 from services.scheduling import dependency_start, move_task, revise_task
 from services.projects import current_project_end, project_deadline_delay
 
@@ -106,7 +106,11 @@ elif page == "Krátkodobý HMG":
                 try: update_task_status(db, row["id"], {"status": "completed", "actual_end": datetime.now().astimezone().isoformat(), "updated_by": session.user.id}); st.rerun()
                 except Exception as error: fail(error)
             with st.expander(f"Přesun: {row['name']}"):
-                new_start = st.date_input("Nový start", task_start, key=f"move-date-{row['id']}")
+                moving_task = next(task for task in tasks if task.id == row["id"])
+                suggested_start = first_available_start(moving_task, task_start, workplaces[row["workplace_id"]], tasks)
+                new_start = st.date_input("Nový start", suggested_start, key=f"move-date-{row['id']}")
+                if suggested_start != task_start:
+                    st.caption(f"Navržen první volný termín na pracovišti: {suggested_start:%d.%m.%Y}")
                 if new_start != task_start:
                     try:
                         proposal = move_task(tasks, dependencies, workplaces, row["id"], new_start); original = {t.id:t for t in tasks}; changed = [t for t in proposal if t.planned_start != original[t.id].planned_start]

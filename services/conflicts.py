@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
-from models.domain import Conflict, Task
+from datetime import date, timedelta
+from models.domain import Conflict, Task, Workplace
+from services.calendars import calculate_task_end, next_working_day
 
 
 def conflicts(tasks: list[Task]) -> list[Conflict]:
@@ -30,3 +31,22 @@ def nearest_available_start(task: Task, occupied: list[Task]) -> date:
         if other.id != task.id and other.planned_start <= task.planned_end and other.planned_end >= candidate:
             candidate = other.planned_end.fromordinal(other.planned_end.toordinal() + 1)
     return candidate
+
+
+def first_available_start(task: Task, requested_start: date, workplace: Workplace, scheduled_tasks: list[Task]) -> date:
+    """Earliest start on the task's workplace calendar with no scheduled overlap.
+
+    Cancelled tasks and the moving task itself are ignored. The full working-day
+    duration is tested, so a gap too short for the task is not offered.
+    """
+    candidate = next_working_day(requested_start, workplace)
+    occupied = sorted(
+        (other for other in scheduled_tasks if other.id != task.id and other.workplace_id == workplace.id and other.status != "cancelled"),
+        key=lambda other: other.planned_start,
+    )
+    while True:
+        candidate_end = calculate_task_end(candidate, task.duration_workdays, workplace)
+        overlapping = [other for other in occupied if other.planned_start <= candidate_end and other.planned_end >= candidate]
+        if not overlapping:
+            return candidate
+        candidate = next_working_day(max(other.planned_end for other in overlapping) + timedelta(days=1), workplace)

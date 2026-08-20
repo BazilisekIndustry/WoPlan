@@ -26,6 +26,8 @@ Moving a task previews all downstream shifts and every detected workplace confli
 
 The project detail includes a full task editor: project, workplace, duration, description, requested completion date and ZT are saved with the recalculated dependency branch in one transaction. The short-term plan provides synchronized views by workplace and project, while the project detail can export a printable PLIST PDF from the same task projection.
 
+Short-term HMG opens on the current week and supports presets from two weeks through twelve months plus a validated custom range. It uses days for short ranges, weeks for medium ranges and months for longer ranges; both grouping views share the same selected interval and overlap logic.
+
 PLIST PDF embeds the bundled DejaVu Sans Mono Unicode fonts from `assets/fonts/`, so Czech and other European diacritics are rendered independently of the user's device. Branding is optional: place `assets/logo.png`, `assets/logo.jpg`, or `assets/logo.svg` in the deployed application (or configure `PLIST_LOGO_PATH` for PNG/JPEG) and the document header will use it while preserving its proportions.
 
 Optional demo seed data is intentionally not applied automatically; create it only after real workplace calendars are agreed.

@@ -6,7 +6,7 @@ from services.capacity import monthly_capacity_hours, planned_hours_in_month
 from services.conflicts import conflicts, first_available_start
 from services.scheduling import CircularDependencyError, dependency_start, move_task, revise_task, validate_acyclic
 from services.projects import current_project_end, project_deadline_delay
-from services.views import group_by_project, group_by_workplace, visible_tasks
+from services.views import group_by_project, group_by_workplace, interval_bounds, visible_tasks
 from services.plist_pdf import build_plist_pdf
 
 WEEKDAY = Workplace("w1", "Chamber", 8, frozenset(range(5)))
@@ -82,6 +82,18 @@ def test_schedule_projections_share_filters_and_chronological_order():
     assert [row["id"] for row in result] == ["1", "2"]
     assert group_by_project(result)[0][1] == result
     assert group_by_workplace(result)[0][1] == result
+
+
+def test_schedule_projection_includes_overlapping_and_one_sided_date_tasks():
+    rows = [
+        {"id": "overlap-start", "name": "Začíná dříve", "planned_start": "2026-08-01", "planned_end": "2026-08-12", "status": "planned"},
+        {"id": "overlap-end", "name": "Končí později", "planned_start": "2026-08-10", "planned_end": "2026-08-25", "status": "planned"},
+        {"id": "deadline", "name": "Jen termín", "requested_end": "2026-08-15", "status": "planned"},
+        {"id": "unscheduled", "name": "Bez termínu", "status": "planned"},
+    ]
+    result = visible_tasks(rows, start=date(2026, 8, 10), end=date(2026, 8, 16))
+    assert {row["id"] for row in result} == {"overlap-start", "overlap-end", "deadline"}
+    assert interval_bounds(next(row for row in result if row["id"] == "deadline")) == (date(2026, 8, 15), date(2026, 8, 15))
 
 
 def test_plist_pdf_is_created_for_empty_project_and_task_details():

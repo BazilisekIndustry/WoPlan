@@ -10,7 +10,7 @@ from services.conflicts import conflicts, first_available_start
 from services.scheduling import dependency_start, move_task, revise_task
 from services.projects import current_project_end, project_deadline_delay
 from services.plist_pdf import build_plist_pdf
-from services.views import group_by_project, group_by_workplace, visible_tasks
+from services.views import group_by_project, group_by_workplace, interval_bounds, visible_tasks
 
 st.set_page_config(page_title="Project Planner", layout="wide")
 logger = logging.getLogger(__name__)
@@ -94,6 +94,34 @@ def render_task_editor(row: dict, *, key_prefix: str) -> None:
     except Exception as error:
         fail(error)
 
+def horizon_end(day: date) -> date:
+    """Calendar-year planning horizon, safe for leap-day dates."""
+    try:
+        return day.replace(year=day.year + 1)
+    except ValueError:
+        return day.replace(year=day.year + 1, day=28)
+
+def short_term_buckets(start: date, end: date) -> tuple[str, list[tuple[date, date, str]]]:
+    """Adapt timeline detail to the selected interval without changing schedule data."""
+    days = (end - start).days + 1
+    if days <= 21:
+        return "den", [(day, day, day.strftime("%d.%m")) for day in (start + timedelta(days=index) for index in range(days))]
+    if days <= 56:
+        buckets, cursor = [], start
+        while cursor <= end:
+            bucket_end = min(cursor + timedelta(days=6), end)
+            buckets.append((cursor, bucket_end, f"{cursor:%d.%m} - {bucket_end:%d.%m}"))
+            cursor = bucket_end + timedelta(days=1)
+        return "týden", buckets
+    month_names = ("led", "úno", "bře", "dub", "kvě", "čer", "čvc", "srp", "zář", "říj", "lis", "pro")
+    buckets, cursor = [], start
+    while cursor <= end:
+        next_month = date(cursor.year + (cursor.month == 12), 1 if cursor.month == 12 else cursor.month + 1, 1)
+        bucket_end = min(next_month - timedelta(days=1), end)
+        buckets.append((cursor, bucket_end, f"{month_names[cursor.month - 1]} {cursor.year}"))
+        cursor = bucket_end + timedelta(days=1)
+    return "měsíc", buckets
+
 st.title("PROJECT PLANNER")
 try:
     db = client(
@@ -134,23 +162,52 @@ if page == "Dashboard":
 
 elif page == "Krátkodobý HMG":
     st.header("Krátkodobý plán")
-    monday = st.date_input("Týden od", today - timedelta(days=today.weekday())); monday -= timedelta(days=monday.weekday()); days = [monday + timedelta(days=i) for i in range(7)]
+    week_start = today - timedelta(days=today.weekday())
+    limit = horizon_end(today)
+    preset = st.selectbox("Období", ["Aktuální týden", "Následující 2 týdny", "Aktuální měsíc", "Následující měsíc", "3 měsíce", "6 měsíců", "12 měsíců", "Vlastní rozsah"])
+    if preset == "Vlastní rozsah":
+        range_a, range_b = st.columns(2)
+        range_start = range_a.date_input("Od", value=st.session_state.get("hmg_custom_start", week_start), min_value=week_start, max_value=limit, key="hmg_custom_start")
+        range_end = range_b.date_input("Do", value=st.session_state.get("hmg_custom_end", min(week_start + timedelta(days=6), limit)), min_value=week_start, max_value=limit, key="hmg_custom_end")
+    else:
+        if preset == "Aktuální týden": range_start, range_end = week_start, week_start + timedelta(days=6)
+        elif preset == "Následující 2 týdny": range_start, range_end = week_start, week_start + timedelta(days=13)
+        elif preset == "Aktuální měsíc":
+            range_start = today.replace(day=1); next_month = date(today.year + (today.month == 12), 1 if today.month == 12 else today.month + 1, 1); range_end = next_month - timedelta(days=1)
+        elif preset == "Následující měsíc":
+            range_start = date(today.year + (today.month == 12), 1 if today.month == 12 else today.month + 1, 1); after_next = date(range_start.year + (range_start.month == 12), 1 if range_start.month == 12 else range_start.month + 1, 1); range_end = after_next - timedelta(days=1)
+        else:
+            months = {"3 měsíce": 3, "6 měsíců": 6, "12 měsíců": 12}[preset]
+            range_start = today
+            month_after = date(today.year + ((today.month - 1 + months) // 12), ((today.month - 1 + months) % 12) + 1, 1)
+            range_end = min(month_after - timedelta(days=1), limit)
+        st.caption(f"Zobrazené období: **{range_start:%d.%m.%Y} - {range_end:%d.%m.%Y}** · maximum je {limit:%d.%m.%Y}")
+    if range_end < range_start:
+        st.error("Datum „Do“ musí být stejné nebo pozdější než datum „Od“.")
+        st.stop()
+    if range_end > limit or (range_end - range_start).days > 366:
+        st.error(f"Zvolte období dlouhé nejvýše 12 měsíců, končící nejpozději {limit:%d.%m.%Y}.")
+        st.stop()
+    scale, buckets = short_term_buckets(range_start, range_end)
     project_filter = st.selectbox("Projekt", ["Vše"] + [p["project_number"] for p in projects]); workplace_filter = st.selectbox("Pracoviště", ["Vše"] + [w.name for w in workplaces.values()]); status_filter = st.selectbox("Stav", ["Vše", "planned", "in_progress", "completed"])
-    filtered = visible_tasks(task_rows, start=days[0], end=days[-1], project_id=next((p["id"] for p in projects if p["project_number"] == project_filter), None), workplace_id=next((w.id for w in workplaces.values() if w.name == workplace_filter), None), status=None if status_filter == "Vše" else status_filter)
+    filtered = visible_tasks(task_rows, start=range_start, end=range_end, project_id=next((p["id"] for p in projects if p["project_number"] == project_filter), None), workplace_id=next((w.id for w in workplaces.values() if w.name == workplace_filter), None), status=None if status_filter == "Vše" else status_filter)
     view = st.radio("Zobrazit", ["Podle pracovišť", "Podle projektů"], horizontal=True, label_visibility="collapsed")
     groups = group_by_workplace(filtered) if view == "Podle pracovišť" else group_by_project(filtered)
     if not groups:
-        st.info("Ve zvoleném týdnu a filtrech nejsou žádné aktivní úkoly.")
+        st.info("Ve zvoleném období a filtrech nejsou žádné aktivní úkoly.")
+    header = st.columns([2.8] + [1] * len(buckets)); header[0].markdown("**Úkol / projekt / pracoviště**")
+    for cell, (_, _, label) in zip(header[1:], buckets): cell.markdown(f"**{label}**")
     for group_name, group_tasks in groups:
         st.subheader(group_name)
         for row in group_tasks:
-            task_start, task_end = date.fromisoformat(row["planned_start"]), date.fromisoformat(row["planned_end"])
-            cells = st.columns([2.8] + [1] * 7)
+            task_start, task_end = interval_bounds(row)
+            cells = st.columns([2.8] + [1] * len(buckets))
             workplace_name = (row.get("workplaces") or {}).get("name") or "Nepřiřazeno"
             project_name = (row.get("projects") or {}).get("project_number") or "Bez projektu"
-            delay = calculate_delay_workdays(task_end, today, workplaces[row["workplace_id"]]) if row["status"] not in {"completed", "cancelled"} else 0
+            workplace = workplaces.get(row.get("workplace_id"))
+            delay = calculate_delay_workdays(task_end, today, workplace) if workplace and row["status"] not in {"completed", "cancelled"} else 0
             cells[0].markdown(f"**{row['name']}**  \n{project_name} · {workplace_name}" + (f" · ⚠️ {delay} prac. d" if delay else ""))
-            for cell, day in zip(cells[1:], days): cell.markdown("🟥" if str(row["id"]) in conflict_ids and task_start <= day <= task_end else "🟦" if task_start <= day <= task_end else "")
+            for cell, (bucket_start, bucket_end, _) in zip(cells[1:], buckets): cell.markdown("🟥" if str(row["id"]) in conflict_ids and task_start <= bucket_end and task_end >= bucket_start else "🟦" if task_start <= bucket_end and task_end >= bucket_start else "")
             if role == "admin":
                 action_a, action_b, action_c = st.columns([1, 1, 5])
                 if row["status"] == "planned" and action_a.button("Zahájit", key=f"action-start-{row['id']}"):
@@ -174,7 +231,7 @@ elif page == "Krátkodobý HMG":
                             update_schedule_atomically(db, payload, expected); st.success("Plán byl aktualizován."); st.rerun()
                         except Exception as error: fail(error)
         st.caption(f"{len(group_tasks)} úkolů")
-    st.caption("🟦 plánovaný průběh · 🟥 kolize pracoviště · časový rozsah a filtry zůstávají stejné v obou pohledech")
+    st.caption(f"🟦 plánovaný průběh · 🟥 kolize pracoviště · osa: {scale} · časový rozsah a filtry zůstávají stejné v obou pohledech")
 
 elif page == "Dlouhodobý výhled":
     st.header("Dlouhodobý výhled"); year=int(st.number_input("Rok",2000,2200,today.year)); head=st.columns(13); head[0].markdown("**Pracoviště**")

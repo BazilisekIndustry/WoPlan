@@ -35,7 +35,7 @@ def dependency_start(predecessor: Task, dependency: Dependency, successor_workpl
 
 
 def move_task(tasks: list[Task], dependencies: list[Dependency], workplaces: dict[object, Workplace], task_id: object, new_start: date) -> list[Task]:
-    """Return a complete proposed schedule. Nothing is persisted here (atomic caller owns commit)."""
+    """Return a complete proposed schedule while retaining every dependency minimum."""
     validate_acyclic(tasks, dependencies)
     by_id = {task.id: task for task in tasks}
     if task_id not in by_id: raise ValueError("Task not found.")
@@ -45,11 +45,17 @@ def move_task(tasks: list[Task], dependencies: list[Dependency], workplaces: dic
     moved = dict(by_id); queue = deque([task_id]); seen = set()
     children = defaultdict(list)
     for dep in dependencies: children[dep.predecessor_task_id].append(dep.successor_task_id)
+    incoming = defaultdict(list)
+    for dep in dependencies: incoming[dep.successor_task_id].append(dep)
     while queue:
         current_id = queue.popleft()
         if current_id in seen: continue
         seen.add(current_id); current = moved[current_id]; wp = workplaces[current.workplace_id]
-        start = next_working_day(new_start, wp) if current_id == task_id else add_working_days(current.planned_start, delta, wp)
+        baseline = next_working_day(new_start, wp) if current_id == task_id else add_working_days(by_id[current_id].planned_start, delta, wp)
+        required = [dependency_start(moved[dep.predecessor_task_id], dep, wp) for dep in incoming[current_id]]
+        # A successor may keep a larger original buffer, but may never be scheduled
+        # before one of its predecessors plus the configured transfer offset.
+        start = next_working_day(max([baseline, *required]), wp)
         end = calculate_task_end(start, current.duration_workdays, wp)
         moved[current_id] = replace(current, planned_start=start, planned_end=end)
         queue.extend(children[current_id])
@@ -77,12 +83,16 @@ def revise_task(tasks: list[Task], dependencies: list[Dependency], workplaces: d
     # Reapply downstream offset using the end-date impact, not root start impact.
     children = defaultdict(list)
     for dep in dependencies: children[dep.predecessor_task_id].append(dep.successor_task_id)
+    incoming = defaultdict(list)
+    for dep in dependencies: incoming[dep.successor_task_id].append(dep)
     queue = deque(children[task_id]); seen = set()
     while queue:
         current_id = queue.popleft()
         if current_id in seen: continue
         seen.add(current_id); current = result[current_id]; wp = workplaces[current.workplace_id]
-        start = add_working_days(by_id[current_id].planned_start, delta, wp)
+        baseline = add_working_days(by_id[current_id].planned_start, delta, wp)
+        required = [dependency_start(result[dep.predecessor_task_id], dep, wp) for dep in incoming[current_id]]
+        start = next_working_day(max([baseline, *required]), wp)
         result[current_id] = replace(current, planned_start=start, planned_end=calculate_task_end(start, current.duration_workdays, wp))
         queue.extend(children[current_id])
     return [result[task.id] for task in tasks]

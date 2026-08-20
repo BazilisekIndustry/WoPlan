@@ -6,6 +6,8 @@ from services.capacity import monthly_capacity_hours, planned_hours_in_month
 from services.conflicts import conflicts, first_available_start
 from services.scheduling import CircularDependencyError, dependency_start, move_task, revise_task, validate_acyclic
 from services.projects import current_project_end, project_deadline_delay
+from services.views import group_by_project, group_by_workplace, visible_tasks
+from services.plist_pdf import build_plist_pdf
 
 WEEKDAY = Workplace("w1", "Chamber", 8, frozenset(range(5)))
 ALL_DAYS = Workplace("w2", "24h", 24, frozenset(range(7)))
@@ -68,3 +70,22 @@ def test_duration_revision_recalculates_end_and_downstream_branch():
     revised = {t.id: t for t in revise_task([a, b], [Dependency("a", "b")], {"w1": WEEKDAY}, "a", 7, "w1", a.planned_start)}
     assert revised["a"].planned_end == date(2026, 8, 11)
     assert revised["b"].planned_start == date(2026, 8, 18)
+
+
+def test_schedule_projections_share_filters_and_chronological_order():
+    rows = [
+        {"id": "2", "project_id": "p", "name": "Later", "workplace_id": "w", "planned_start": "2026-08-10", "planned_end": "2026-08-12", "requested_end": "2026-08-15", "status": "planned", "projects": {"project_number": "P-1", "name": "Pilot"}, "workplaces": {"name": "Chamber"}},
+        {"id": "1", "project_id": "p", "name": "Earlier", "workplace_id": "w", "planned_start": "2026-08-03", "planned_end": "2026-08-05", "requested_end": "2026-08-06", "status": "planned", "projects": {"project_number": "P-1", "name": "Pilot"}, "workplaces": {"name": "Chamber"}},
+        {"id": "3", "project_id": "p", "name": "Cancelled", "workplace_id": "w", "planned_start": "2026-08-04", "planned_end": "2026-08-05", "status": "cancelled", "projects": {"project_number": "P-1", "name": "Pilot"}, "workplaces": {"name": "Chamber"}},
+    ]
+    result = visible_tasks(rows, start=date(2026, 8, 1), end=date(2026, 8, 31))
+    assert [row["id"] for row in result] == ["1", "2"]
+    assert group_by_project(result)[0][1] == result
+    assert group_by_workplace(result)[0][1] == result
+
+
+def test_plist_pdf_is_created_for_empty_project_and_task_details():
+    project = {"project_number": "P-1", "name": "Pilot", "description": "Demo"}
+    task_rows = [{"id": "1", "project_id": "p", "name": "Test", "description": "Popis", "workplace_id": "w", "planned_start": "2026-08-03", "planned_end": "2026-08-05", "requested_end": "2026-08-06", "zt_count": 3, "status": "planned", "workplaces": {"name": "Chamber"}}]
+    assert build_plist_pdf(project, [], date(2026, 8, 20)).startswith(b"%PDF")
+    assert build_plist_pdf(project, task_rows, date(2026, 8, 20)).startswith(b"%PDF")

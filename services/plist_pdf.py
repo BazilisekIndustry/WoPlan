@@ -96,7 +96,7 @@ def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = 
     body = ParagraphStyle("PlistBody", parent=styles["BodyText"], fontName=regular, fontSize=8, leading=10)
     small = ParagraphStyle("PlistSmall", parent=body, fontName=regular, fontSize=7, leading=9)
     small_bold = ParagraphStyle("PlistSmallBold", parent=small, fontName=bold)
-    header_text = [Paragraph("Požadavkový PLIST", title), Spacer(1, 1 * mm), Paragraph(f"<b>Projekt:</b> {escape(project.get('project_number') or '-') } - {escape(project.get('name') or '-') }", body)]
+    header_text = [Paragraph("Požadavkový list HK", title), Spacer(1, 1 * mm), Paragraph(f"<b>Projekt:</b> {escape(project.get('project_number') or '-') } - {escape(project.get('name') or '-') }", body)]
     logo = _logo_flowable(42 * mm, 18 * mm)
     header = Table([[logo or "", header_text]], colWidths=[46 * mm, 204 * mm], hAlign="LEFT")
     header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))

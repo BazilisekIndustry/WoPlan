@@ -101,3 +101,4 @@ def test_plist_pdf_is_created_for_empty_project_and_task_details():
     task_rows = [{"id": "1", "project_id": "p", "name": "Test", "description": "Popis", "workplace_id": "w", "planned_start": "2026-08-03", "planned_end": "2026-08-05", "requested_end": "2026-08-06", "zt_count": 3, "status": "planned", "workplaces": {"name": "Chamber"}}]
     assert build_plist_pdf(project, [], date(2026, 8, 20)).startswith(b"%PDF")
     assert build_plist_pdf(project, task_rows, date(2026, 8, 20)).startswith(b"%PDF")
+    assert build_plist_pdf(project, task_rows, date(2026, 8, 20), {"1": ["X01", "X02"]}).startswith(b"%PDF")

@@ -74,7 +74,7 @@ def _fmt(value: str | None) -> str:
     return date.fromisoformat(value).strftime("%d.%m.%Y") if value else "-"
 
 
-def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = None) -> bytes:
+def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = None, task_sample_codes: dict[str, list[str]] | None = None) -> bytes:
     """Create a compact, multi-page PDF suitable for printing and empty projects."""
     try:
         from reportlab.lib import colors
@@ -127,11 +127,13 @@ def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = 
     if not items:
         story.append(Paragraph("Nejsou k dispozici žádné úkoly pro export.", body))
     else:
-        rows = [[Paragraph(header, small_bold) for header in ("#", "Úkol a popis", "Pracoviště", "Požadovaný termín", "ZT")]]
+        task_sample_codes = task_sample_codes or {}
+        rows = [[Paragraph(header, small_bold) for header in ("#", "Úkol a popis", "Vzorky", "Pracoviště", "Požadovaný termín", "ZT")]]
         for index, task in enumerate(items, start=1):
             description = escape(task.get("description") or "Bez popisu")
-            rows.append([Paragraph(str(index), small), Paragraph(f"<b>{escape(task['name'])}</b><br/>{description}", small), Paragraph(escape((task.get("workplaces") or {}).get("name") or "Nepřiřazeno"), small), Paragraph(_fmt(task.get("requested_end")), small), Paragraph(str(task.get("zt_count", 0)), small)])
-        table = Table(rows, colWidths=[10 * mm, 122 * mm, 45 * mm, 43 * mm, 12 * mm], repeatRows=1)
+            codes = ", ".join(task_sample_codes.get(str(task["id"]), [])) or "—"
+            rows.append([Paragraph(str(index), small), Paragraph(f"<b>{escape(task['name'])}</b><br/>{description}", small), Paragraph(escape(codes), small), Paragraph(escape((task.get("workplaces") or {}).get("name") or "Nepřiřazeno"), small), Paragraph(_fmt(task.get("requested_end")), small), Paragraph(str(task.get("zt_count", 0)), small)])
+        table = Table(rows, colWidths=[9 * mm, 74 * mm, 84 * mm, 37 * mm, 37 * mm, 10 * mm], repeatRows=1)
         table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#60A2D4")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), .25, colors.HexColor("#BBCBD3")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F8F9")]), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
         story.append(table)
     doc.build(story)

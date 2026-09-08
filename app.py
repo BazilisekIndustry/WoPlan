@@ -1,8 +1,10 @@
 from datetime import date, datetime, timedelta
+import csv
+from io import StringIO
 import logging
 import streamlit as st
 from models.domain import Dependency, Task, Workplace
-from repositories.planner import create_dependency, create_project, create_task, create_workplace, list_all_workplaces, list_dependencies, list_projects, list_tasks, list_workplaces, set_workplace_active, update_task_status
+from repositories.planner import create_dependency, create_project, create_sample, create_task, create_workplace, import_project_samples, list_all_workplaces, list_dependencies, list_project_samples, list_projects, list_task_sample_ids, list_tasks, list_workplaces, resolve_task_sample_codes, set_task_samples, set_workplace_active, split_sample, update_sample, update_task_status
 from repositories.supabase_repo import client, update_schedule_atomically
 from services.calendars import calculate_delay_workdays, calculate_task_end, next_working_day
 from services.capacity import monthly_capacity_hours, planned_hours_in_month
@@ -10,6 +12,7 @@ from services.conflicts import conflicts, first_available_start
 from services.scheduling import dependency_start, move_task, revise_task
 from services.projects import current_project_end, project_deadline_delay
 from services.plist_pdf import build_plist_pdf
+from services.samples import parse_sample_csv, validate_children
 from services.views import group_by_project, group_by_workplace, interval_bounds, visible_tasks
 
 st.set_page_config(page_title="Project Planner", layout="wide")
@@ -30,7 +33,7 @@ def fail(error):
         st.error("Supabase zápis odmítl. Zkontrolujte, že je váš profil v `public.profiles` opravdu ve roli `admin`.")
     elif "foreign key" in message:
         st.error("Vybraný projekt nebo pracoviště už není dostupné. Obnovte stránku a vyberte jej znovu.")
-    elif "duplicate key" in message or "unique" in message:
+    elif "duplicate key" in message or "unique" in message or "sample code already exists" in message:
         st.error("Záznam s touto hodnotou již existuje. Použijte jiný název nebo číslo projektu.")
     elif "check constraint" in message or "violates check" in message:
         st.error("Hodnoty neodpovídají pravidlům databáze. Zkontrolujte délku, ZT, hodiny a pracovní dny.")
@@ -59,13 +62,20 @@ def render_task_editor(row: dict, *, key_prefix: str) -> None:
     if not current_project or not current_workplace:
         st.warning("Úkol odkazuje na neaktivní nebo nedostupná data a nelze jej bezpečně upravit.")
         return
+    active_samples = list_project_samples(db, str(row["project_id"]), status="active")
+    sample_choices = {f"{sample['code']} — {sample.get('description') or sample.get('type') or ''}": sample["id"] for sample in active_samples}
+    selected_ids = set(list_task_sample_ids(db, str(row["id"]))) if row.get("sample_scope", "SELECTED") == "SELECTED" else set()
     with st.form(f"task-editor-{key_prefix}-{row['id']}"):
         left, right = st.columns(2)
         name = left.text_input("Název úkolu *", row["name"])
         project_label = left.selectbox("Projekt *", list(project_options), index=list(project_options).index(current_project))
         workplace_label = left.selectbox("Pracoviště *", list(workplace_options), index=list(workplace_options).index(current_workplace))
         duration = left.number_input("Délka (pracovní dny) *", min_value=1, value=int(row["duration_workdays"]))
-        zt_count = right.number_input("Počet zkušebních těles", min_value=0, value=int(row["zt_count"]))
+        scope_labels = {"Všechny aktivní vzorky projektu": "ALL", "Vybrat vzorky": "SELECTED"}
+        selected_scope_label = right.radio("Vzorky", list(scope_labels), index=0 if row.get("sample_scope") == "ALL" else 1)
+        selected_scope = scope_labels[selected_scope_label]
+        selected_labels = right.multiselect("Vybrané vzorky", list(sample_choices), default=[label for label, value in sample_choices.items() if value in selected_ids], disabled=selected_scope == "ALL", help="Hledejte podle kódu; vybírat lze pouze aktivní vzorky tohoto projektu.")
+        right.caption(f"ZT (odvozeno): {len(active_samples) if selected_scope == 'ALL' else len(selected_labels)}")
         planned_start = right.date_input("Plánovaný začátek *", date.fromisoformat(row["planned_start"]))
         requested_enabled = right.checkbox("Zadat požadovaný termín dokončení", value=bool(row.get("requested_end")))
         requested_end = right.date_input("Požadovaný termín dokončení", date.fromisoformat(row["requested_end"]) if row.get("requested_end") else date.fromisoformat(row["planned_end"]), disabled=not requested_enabled)
@@ -85,10 +95,12 @@ def render_task_editor(row: dict, *, key_prefix: str) -> None:
         for item in changed or [root]:
             values = {"id": str(item.id), "planned_start": item.planned_start.isoformat(), "planned_end": item.planned_end.isoformat()}
             if item.id == row["id"]:
-                values.update({"duration_workdays": item.duration_workdays, "workplace_id": str(item.workplace_id), "project_id": str(project_options[project_label]), "name": name.strip(), "description": description.strip(), "requested_end": requested_end.isoformat() if requested_enabled else "", "zt_count": int(zt_count)})
+                values.update({"duration_workdays": item.duration_workdays, "workplace_id": str(item.workplace_id), "project_id": str(project_options[project_label]), "name": name.strip(), "description": description.strip(), "requested_end": requested_end.isoformat() if requested_enabled else ""})
             payload.append(values)
         expected = {str(item["id"]): item["updated_at"] for item in task_rows if str(item["id"]) in {entry["id"] for entry in payload}}
         update_schedule_atomically(db, payload, expected)
+        # Association RPC validates project isolation and replaces the selection atomically.
+        set_task_samples(db, str(row["id"]), selected_scope, [sample_choices[label] for label in selected_labels])
         st.success("Úkol i navazující harmonogram byly aktualizovány.")
         st.rerun()
     except Exception as error:
@@ -254,7 +266,13 @@ elif page == "Projekty":
         with st.expander("+ Nová úloha"):
             pmap={f"{p['project_number']} – {p['name']}":p["id"] for p in projects}; wmap={w.name:w.id for w in workplaces.values()}
             with st.form("new-task"):
-                project=st.selectbox("Projekt",pmap); name=st.text_input("Název úlohy"); description=st.text_area("Popis úkolu"); work=st.selectbox("Pracoviště",wmap); duration=st.number_input("Délka (pracovní dny)",1,value=1); zt=st.number_input("Počet zkušebních těles",0,value=0); start=st.date_input("Začátek",today); requested_end=st.date_input("Požadovaný termín dokončení", value=None)
+                project=st.selectbox("Projekt",pmap); name=st.text_input("Název úlohy"); description=st.text_area("Popis úkolu"); work=st.selectbox("Pracoviště",wmap); duration=st.number_input("Délka (pracovní dny)",1,value=1)
+                new_project_samples = list_project_samples(db, str(pmap[project]), status="active")
+                new_sample_choices = {f"{sample['code']} — {sample.get('description') or sample.get('type') or ''}": sample["id"] for sample in new_project_samples}
+                new_scope_label = st.radio("Vzorky", ["Všechny aktivní vzorky projektu", "Vybrat vzorky"], horizontal=True)
+                new_selected_labels = st.multiselect("Vybrané vzorky", list(new_sample_choices), disabled=new_scope_label.startswith("Všechny"))
+                st.caption(f"ZT (odvozeno): {len(new_project_samples) if new_scope_label.startswith('Všechny') else len(new_selected_labels)}")
+                start=st.date_input("Začátek",today); requested_end=st.date_input("Požadovaný termín dokončení", value=None)
                 predecessor_options = {"Bez závislosti": None, **{f"{t['projects']['project_number']} · {t['name']} ({t['planned_end']})": t["id"] for t in task_rows}}
                 predecessor_label = st.selectbox("Navázat na", predecessor_options)
                 predecessor = predecessor_options[predecessor_label]
@@ -265,7 +283,8 @@ elif page == "Projekty":
                         if predecessor: start=dependency_start(next(t for t in tasks if t.id==predecessor),Dependency(predecessor,"new",int(offset)),wp)
                         start=next_working_day(start,wp)
                         if not name.strip(): raise ValueError("Název úlohy je povinný.")
-                        created=create_task(db,{"project_id":pmap[project],"name":name.strip(),"description":description.strip() or None,"workplace_id":wp.id,"duration_workdays":int(duration),"zt_count":int(zt),"requested_end":requested_end.isoformat() if requested_end else None,"planned_start":start.isoformat(),"planned_end":calculate_task_end(start,int(duration),wp).isoformat(),"created_by":session.user.id,"updated_by":session.user.id})
+                        created=create_task(db,{"project_id":pmap[project],"name":name.strip(),"description":description.strip() or None,"workplace_id":wp.id,"duration_workdays":int(duration),"zt_count":0,"sample_scope":"SELECTED","requested_end":requested_end.isoformat() if requested_end else None,"planned_start":start.isoformat(),"planned_end":calculate_task_end(start,int(duration),wp).isoformat(),"created_by":session.user.id,"updated_by":session.user.id})
+                        set_task_samples(db, str(created["id"]), "ALL" if new_scope_label.startswith("Všechny") else "SELECTED", [new_sample_choices[label] for label in new_selected_labels])
                         if predecessor: create_dependency(db,{"predecessor_task_id":predecessor,"successor_task_id":created["id"],"offset_workdays":int(offset),"created_by":session.user.id})
                         st.rerun()
                     except Exception as error: fail(error)
@@ -281,6 +300,64 @@ elif page == "Projekty":
         if current_end and selected.get("planned_end"):
             deadline = date.fromisoformat(selected["planned_end"]); delay = project_deadline_delay(project_tasks, deadline, workplaces)
             z.metric("Zpoždění projektu", f"{delay} pracovních dnů" if delay else "V termínu")
+        st.subheader("Vzorky")
+        sample_filter, sample_search = st.columns(2)
+        sample_status = sample_filter.selectbox("Stav vzorku", ["all", "active", "split", "inactive"], format_func=lambda x: {"all": "Vše", "active": "Aktivní", "split": "Rozdělené", "inactive": "Neaktivní"}[x])
+        sample_query = sample_search.text_input("Hledat kód vzorku")
+        try:
+            project_samples = list_project_samples(db, str(selected["id"]), status=sample_status, search=sample_query)
+            st.caption(f"{len(project_samples)} zobrazených vzorků (max. 500; pro větší soubory použijte hledání).")
+            st.dataframe([{"Kód": s["code"], "Popis": s.get("description") or "", "Typ": s.get("type") or "", "Stav": s["status"], "Rodič": (s.get("parent") or {}).get("code") or "—"} for s in project_samples], hide_index=True, use_container_width=True)
+        except Exception as error:
+            fail(error); project_samples = []
+        if role == "admin":
+            add_col, import_col, split_col = st.columns(3)
+            with add_col.expander("+ Přidat vzorek"):
+                with st.form(f"add-sample-{selected['id']}", clear_on_submit=True):
+                    code = st.text_input("Kód *"); sample_description = st.text_input("Popis"); sample_type = st.text_input("Typ")
+                    if st.form_submit_button("Přidat vzorek"):
+                        try:
+                            if not code.strip(): raise ValueError("Kód vzorku je povinný.")
+                            create_sample(db, {"project_id": selected["id"], "code": code.strip(), "description": sample_description.strip() or None, "type": sample_type.strip() or None, "status": "active", "created_by": session.user.id, "updated_by": session.user.id})
+                            st.rerun()
+                        except Exception as error: fail(error)
+            with import_col.expander("Import CSV"):
+                uploaded = st.file_uploader("CSV: Code, Description, Type", type="csv", key=f"sample-csv-{selected['id']}")
+                if uploaded:
+                    try:
+                        imported, import_errors = parse_sample_csv(uploaded.getvalue())
+                        db_codes = {sample["code"] for sample in list_project_samples(db, str(selected["id"]), status="all", limit=500)}
+                        import_errors += [f"Řádek {row['line']}: kód {row['code']!r} již existuje." for row in imported if row["code"] in db_codes]
+                        st.dataframe([{k: v for k, v in row.items() if k != "line"} for row in imported], hide_index=True)
+                        if import_errors: st.error("\n".join(import_errors))
+                        elif st.button("Potvrdit import", key=f"confirm-import-{selected['id']}"):
+                            import_project_samples(db, str(selected["id"]), imported)
+                            st.rerun()
+                    except Exception as error: fail(error)
+            with split_col.expander("Rozdělit vzorek"):
+                active_for_split = {sample["code"]: sample for sample in project_samples if sample["status"] == "active"}
+                if active_for_split:
+                    split_code = st.selectbox("Původní vzorek", list(active_for_split), key=f"split-parent-{selected['id']}")
+                    defaults = active_for_split[split_code]
+                    child_codes = st.text_area("Kódy nových vzorků (jeden na řádek)", key=f"split-codes-{selected['id']}")
+                    split_description = st.text_input("Výchozí popis", value=defaults.get("description") or "", key=f"split-description-{selected['id']}")
+                    split_type = st.text_input("Výchozí typ", value=defaults.get("type") or "", key=f"split-type-{selected['id']}")
+                    if st.button("Rozdělit", key=f"split-confirm-{selected['id']}"):
+                        try:
+                            children = validate_children(split_code, [{"code": code, "description": split_description, "type": split_type} for code in child_codes.splitlines()])
+                            split_sample(db, str(defaults["id"]), children); st.rerun()
+                        except Exception as error: fail(error)
+            with st.expander("Změnit stav vzorku"):
+                changeable = {sample["code"]: sample for sample in project_samples if sample["status"] in {"active", "inactive"}}
+                if changeable:
+                    status_code = st.selectbox("Vzorek", list(changeable), key=f"sample-status-code-{selected['id']}")
+                    new_status = st.selectbox("Nový stav", ["active", "inactive"], index=0 if changeable[status_code]["status"] == "active" else 1, key=f"sample-status-{selected['id']}")
+                    if st.button("Uložit stav", key=f"save-sample-status-{selected['id']}"):
+                        try: update_sample(db, str(changeable[status_code]["id"]), {"status": new_status, "updated_by": session.user.id}); st.rerun()
+                        except Exception as error: fail(error)
+            csv_output = StringIO(); writer = csv.writer(csv_output); writer.writerow(["Code", "Description", "Type", "Status", "Parent sample code"])
+            for sample in list_project_samples(db, str(selected["id"]), status="all", limit=10000): writer.writerow([sample["code"], sample.get("description") or "", sample.get("type") or "", sample["status"], (sample.get("parent") or {}).get("code") or ""])
+            st.download_button("Exportovat vzorky CSV", csv_output.getvalue().encode("utf-8-sig"), file_name=f"samples_{selected['project_number']}.csv", mime="text/csv")
         project_rows = visible_tasks([row for row in task_rows if row["project_id"] == selected["id"]])
         st.dataframe([{"Úloha":row["name"],"Popis":row.get("description") or "—","Pracoviště":(row.get("workplaces") or {}).get("name") or "—","Start":row["planned_start"],"Konec":row["planned_end"],"Požadovaný termín":row.get("requested_end") or "—","ZT":row["zt_count"],"Stav":row["status"]} for row in project_rows],hide_index=True,use_container_width=True)
         if role == "admin":
@@ -295,7 +372,7 @@ elif page == "Projekty":
         st.subheader("Požadavkový PLIST")
         st.caption("Export vždy vychází z aktuálních úkolů projektu a používá stejné chronologické řazení jako HMG.")
         try:
-            pdf = build_plist_pdf(selected, project_rows)
+            pdf = build_plist_pdf(selected, project_rows, task_sample_codes=resolve_task_sample_codes(db, str(selected["id"]), project_rows))
             safe_number = "".join(char if char.isalnum() or char in "-_" else "_" for char in selected["project_number"])
             st.download_button("Stáhnout PLIST v PDF", pdf, file_name=f"PLIST_{safe_number}.pdf", mime="application/pdf", type="primary")
         except Exception as error:

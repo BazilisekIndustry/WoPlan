@@ -14,7 +14,7 @@ Focused planning for hot cells, chambers and technical workplaces. Supabase is t
 
 Requires Python 3.10+. Create a virtual environment, install `pip install -r requirements.txt`, copy `.env.example` to `.env`, then provide the Supabase URL and **anon** key only. Never expose a service-role key.
 
-Apply the migrations in chronological order, including `202608200001_task_details_and_atomic_edits.sql`, in the Supabase SQL editor (or Supabase CLI). The last migration adds task descriptions and requested completion dates and extends the atomic scheduling RPC used by task editing. Create Auth users, then insert their `profiles` rows with `admin` or `viewer`. RLS permits all authenticated users to read planning data and only profile-backed admins to modify it.
+Apply the migrations in chronological order, including `202609080001_samples.sql`, in the Supabase SQL editor (or Supabase CLI). The sample migration adds globally unique sample codes, parent/child lineage, transactional CSV import and splits, task sample scopes, derived ZT counts and RLS. Create Auth users, then insert their `profiles` rows with `admin` or `viewer`. RLS permits all authenticated users to read planning data and only profile-backed admins to modify it.
 
 To populate non-production data, run [supabase/seed_demo.sql](supabase/seed_demo.sql) after the migrations. It creates explicitly named `DEMO-*` projects, one 24-hour workplace, a dependency chain and an intentional Chamber 2 conflict.
 

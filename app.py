@@ -125,6 +125,10 @@ def open_samples_for_project(project_id: str) -> None:
     st.session_state["main-navigation"] = "Vzorky"
 
 
+def shift_dashboard_week(days: int) -> None:
+    st.session_state["dashboard_week"] = st.session_state.get("dashboard_week", today) + timedelta(days=days)
+
+
 def render_samples_module() -> None:
     """The canonical UI for sample browsing and administration."""
     st.header("Vzorky")
@@ -276,8 +280,48 @@ if st.sidebar.button("Odhlásit"): db.auth.sign_out(); st.session_state.clear();
 
 if page == "Dashboard":
     delayed = [t for t in tasks if t.status not in {"completed", "cancelled"} and t.planned_end < today]
-    a,b,c = st.columns(3); a.metric("Aktivní úlohy", sum(t.status in {"planned","in_progress"} for t in tasks)); b.metric("Zpožděné", len(delayed)); c.metric("Kolize", len(conflict_list))
-    if delayed or conflict_list: st.warning(f"Dnešní problémy: {len(delayed)} zpožděných úloh, {len(conflict_list)} kolizí.")
+    delayed_project_ids = {str(task.project_id) for task in delayed}
+    a,b,c,d = st.columns(4)
+    a.metric("Aktivní úlohy", sum(t.status in {"planned","in_progress"} for t in tasks))
+    b.metric("Zpožděné úlohy", len(delayed))
+    c.metric("Zpožděné projekty", len(delayed_project_ids))
+    d.metric("Kolize", len(conflict_list))
+    if delayed or conflict_list:
+        st.warning(f"Vyžaduje pozornost: {len(delayed)} zpožděných úloh, {len(delayed_project_ids)} zpožděných projektů a {len(conflict_list)} kolizí.")
+
+    st.subheader("Týdenní přehled")
+    week_controls = st.columns([1, 2, 1, 4])
+    week_controls[0].button("← Předchozí týden", on_click=shift_dashboard_week, args=(-7,))
+    chosen_day = week_controls[1].date_input("Týden od", value=st.session_state.get("dashboard_week", today), key="dashboard_week")
+    week_start = chosen_day - timedelta(days=chosen_day.weekday())
+    week_end = week_start + timedelta(days=6)
+    week_controls[2].button("Další týden →", on_click=shift_dashboard_week, args=(7,))
+    week_controls[3].caption(f"{week_start:%d.%m.%Y} – {week_end:%d.%m.%Y}")
+    weekly_tasks = visible_tasks(task_rows, start=week_start, end=week_end)
+    if not weekly_tasks:
+        st.info("V tomto týdnu nejsou naplánované žádné aktivní úlohy.")
+    else:
+        for workplace_name, workplace_tasks in group_by_workplace(weekly_tasks):
+            with st.expander(f"{workplace_name} · {len(workplace_tasks)} úkolů", expanded=True):
+                st.dataframe([{
+                    "Úkol": row["name"],
+                    "Projekt": (row.get("projects") or {}).get("project_number") or "—",
+                    "Start": row.get("planned_start") or "—",
+                    "Konec": row.get("planned_end") or "—",
+                    "Stav": row["status"],
+                    "Upozornění": "⚠️ zpožděno" if date.fromisoformat(row["planned_end"]) < today and row["status"] not in {"completed", "cancelled"} else ("⚠️ kolize" if str(row["id"]) in conflict_ids else "—"),
+                } for row in workplace_tasks], hide_index=True, use_container_width=True)
+
+    if delayed:
+        with st.expander(f"Zobrazit zpožděné úkoly ({len(delayed)})"):
+            st.dataframe([{
+                "Úkol": task.name,
+                "Projekt": next((project["project_number"] for project in projects if project["id"] == task.project_id), "—"),
+                "Pracoviště": workplaces.get(task.workplace_id).name if workplaces.get(task.workplace_id) else "—",
+                "Plánovaný konec": task.planned_end.isoformat(),
+                "Zpoždění": f"{calculate_delay_workdays(task.planned_end, today, workplaces[task.workplace_id])} prac. d" if task.workplace_id in workplaces else "—",
+                "Stav": task.status,
+            } for task in sorted(delayed, key=lambda item: item.planned_end)], hide_index=True, use_container_width=True)
 
 elif page == "Krátkodobý HMG":
     st.header("Krátkodobý plán")

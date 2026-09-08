@@ -94,19 +94,24 @@ def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = 
     title = ParagraphStyle("PlistTitle", parent=styles["Title"], fontName=bold, fontSize=18, leading=22, textColor=colors.HexColor("#123047"))
     heading = ParagraphStyle("PlistHeading", parent=styles["Heading2"], fontName=bold, fontSize=12, leading=15, textColor=colors.HexColor("#123047"))
     body = ParagraphStyle("PlistBody", parent=styles["BodyText"], fontName=regular, fontSize=8, leading=10)
+    warning = ParagraphStyle("PlistWarning", parent=body, fontName=bold, textColor=colors.HexColor("#B42318"), backColor=colors.HexColor("#FEE4E2"), borderColor=colors.HexColor("#B42318"), borderWidth=.5, borderPadding=5, spaceBefore=3, spaceAfter=3)
     small = ParagraphStyle("PlistSmall", parent=body, fontName=regular, fontSize=7, leading=9)
     small_bold = ParagraphStyle("PlistSmallBold", parent=small, fontName=bold)
     header_text = [Paragraph("Požadavkový list HK", title), Spacer(1, 1 * mm), Paragraph(f"<b>Projekt:</b> {escape(project.get('project_number') or '-') } - {escape(project.get('name') or '-') }", body)]
     logo = _logo_flowable(42 * mm, 18 * mm)
     header = Table([[logo or "", header_text]], colWidths=[46 * mm, 204 * mm], hAlign="LEFT")
     header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
+    dates = [date.fromisoformat(task["planned_start"]) for task in items] + [date.fromisoformat(task["planned_end"]) for task in items]
+    planned_project_end = date.fromisoformat(project["planned_end"]) if project.get("planned_end") else None
+    schedule_finish = max(dates) if dates else None
     story = [header, Spacer(1, 2 * mm)]
     if project.get("description"):
         story.append(Paragraph(f"<b>Popis:</b> {escape(project['description'])}", body))
     story.append(Paragraph(f"<b>Vytvořeno:</b> {created_on.strftime('%d.%m.%Y')} &nbsp;&nbsp; <b>Plánované dokončení:</b> {_fmt(project.get('planned_end'))}", body))
+    if planned_project_end and schedule_finish and schedule_finish > planned_project_end:
+        story.append(Paragraph(f"⚠ HMG končí {schedule_finish:%d.%m.%Y}, což je po plánovaném dokončení projektu ({planned_project_end:%d.%m.%Y}).", warning))
     story += [Spacer(1, 5 * mm), Paragraph("Celkový harmonogram projektu", heading)]
 
-    dates = [date.fromisoformat(task["planned_start"]) for task in items] + [date.fromisoformat(task["planned_end"]) for task in items]
     if dates:
         begin, finish = min(dates), max(dates)
         span = max((finish - begin).days, 1)

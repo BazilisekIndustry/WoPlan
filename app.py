@@ -65,17 +65,22 @@ def render_task_editor(row: dict, *, key_prefix: str) -> None:
     active_samples = list_project_samples(db, str(row["project_id"]), status="active")
     sample_choices = {f"{sample['code']} — {sample.get('description') or sample.get('type') or ''}": sample["id"] for sample in active_samples}
     selected_ids = set(list_task_sample_ids(db, str(row["id"]))) if row.get("sample_scope", "SELECTED") == "SELECTED" else set()
+    # These controls intentionally live outside the form.  A form only reruns on
+    # submit, which would otherwise leave the multiselect disabled after changing
+    # scope until the user saved the whole task.
+    scope_labels = {"Všechny aktivní vzorky projektu": "ALL", "Vybrat vzorky": "SELECTED"}
+    scope_key = f"task-scope-{key_prefix}-{row['id']}"
+    selected_key = f"task-selected-samples-{key_prefix}-{row['id']}"
+    selected_scope_label = st.radio("Vzorky", list(scope_labels), index=0 if row.get("sample_scope") == "ALL" else 1, key=scope_key, horizontal=True)
+    selected_scope = scope_labels[selected_scope_label]
+    selected_labels = st.multiselect("Vybrané vzorky", list(sample_choices), default=[label for label, value in sample_choices.items() if value in selected_ids], disabled=selected_scope == "ALL", key=selected_key, help="Hledejte podle kódu; vybírat lze pouze aktivní vzorky tohoto projektu.")
+    st.caption(f"ZT (odvozeno): {len(active_samples) if selected_scope == 'ALL' else len(selected_labels)}")
     with st.form(f"task-editor-{key_prefix}-{row['id']}"):
         left, right = st.columns(2)
         name = left.text_input("Název úkolu *", row["name"])
         project_label = left.selectbox("Projekt *", list(project_options), index=list(project_options).index(current_project))
         workplace_label = left.selectbox("Pracoviště *", list(workplace_options), index=list(workplace_options).index(current_workplace))
         duration = left.number_input("Délka (pracovní dny) *", min_value=1, value=int(row["duration_workdays"]))
-        scope_labels = {"Všechny aktivní vzorky projektu": "ALL", "Vybrat vzorky": "SELECTED"}
-        selected_scope_label = right.radio("Vzorky", list(scope_labels), index=0 if row.get("sample_scope") == "ALL" else 1)
-        selected_scope = scope_labels[selected_scope_label]
-        selected_labels = right.multiselect("Vybrané vzorky", list(sample_choices), default=[label for label, value in sample_choices.items() if value in selected_ids], disabled=selected_scope == "ALL", help="Hledejte podle kódu; vybírat lze pouze aktivní vzorky tohoto projektu.")
-        right.caption(f"ZT (odvozeno): {len(active_samples) if selected_scope == 'ALL' else len(selected_labels)}")
         planned_start = right.date_input("Plánovaný začátek *", date.fromisoformat(row["planned_start"]))
         requested_enabled = right.checkbox("Zadat požadovaný termín dokončení", value=bool(row.get("requested_end")))
         requested_end = right.date_input("Požadovaný termín dokončení", date.fromisoformat(row["requested_end"]) if row.get("requested_end") else date.fromisoformat(row["planned_end"]), disabled=not requested_enabled)
@@ -370,13 +375,16 @@ elif page == "Projekty":
                     except Exception as error: fail(error)
         with st.expander("+ Nová úloha"):
             pmap={f"{p['project_number']} – {p['name']}":p["id"] for p in projects}; wmap={w.name:w.id for w in workplaces.values()}
+            # Kept outside the form so changing project/scope reruns immediately
+            # and enables/disables the concrete-sample picker correctly.
+            project = st.selectbox("Projekt", pmap, key="new-task-project")
+            new_project_samples = list_project_samples(db, str(pmap[project]), status="active")
+            new_sample_choices = {f"{sample['code']} — {sample.get('description') or sample.get('type') or ''}": sample["id"] for sample in new_project_samples}
+            new_scope_label = st.radio("Vzorky", ["Všechny aktivní vzorky projektu", "Vybrat vzorky"], horizontal=True, key="new-task-scope")
+            new_selected_labels = st.multiselect("Vybrané vzorky", list(new_sample_choices), disabled=new_scope_label.startswith("Všechny"), key="new-task-selected-samples")
+            st.caption(f"ZT (odvozeno): {len(new_project_samples) if new_scope_label.startswith('Všechny') else len(new_selected_labels)}")
             with st.form("new-task"):
-                project=st.selectbox("Projekt",pmap); name=st.text_input("Název úlohy"); description=st.text_area("Popis úkolu"); work=st.selectbox("Pracoviště",wmap); duration=st.number_input("Délka (pracovní dny)",1,value=1)
-                new_project_samples = list_project_samples(db, str(pmap[project]), status="active")
-                new_sample_choices = {f"{sample['code']} — {sample.get('description') or sample.get('type') or ''}": sample["id"] for sample in new_project_samples}
-                new_scope_label = st.radio("Vzorky", ["Všechny aktivní vzorky projektu", "Vybrat vzorky"], horizontal=True)
-                new_selected_labels = st.multiselect("Vybrané vzorky", list(new_sample_choices), disabled=new_scope_label.startswith("Všechny"))
-                st.caption(f"ZT (odvozeno): {len(new_project_samples) if new_scope_label.startswith('Všechny') else len(new_selected_labels)}")
+                name=st.text_input("Název úlohy"); description=st.text_area("Popis úkolu"); work=st.selectbox("Pracoviště",wmap); duration=st.number_input("Délka (pracovní dny)",1,value=1)
                 start=st.date_input("Začátek",today); requested_end=st.date_input("Požadovaný termín dokončení", value=None)
                 predecessor_options = {"Bez závislosti": None, **{f"{t['projects']['project_number']} · {t['name']} ({t['planned_end']})": t["id"] for t in task_rows}}
                 predecessor_label = st.selectbox("Navázat na", predecessor_options)

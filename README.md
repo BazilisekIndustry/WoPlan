@@ -14,7 +14,7 @@ Focused planning for hot cells, chambers and technical workplaces. Supabase is t
 
 Requires Python 3.10+. Create a virtual environment, install `pip install -r requirements.txt`, copy `.env.example` to `.env`, then provide the Supabase URL and **anon** key only. Never expose a service-role key.
 
-Apply the migrations in chronological order, including `202609080001_samples.sql`, in the Supabase SQL editor (or Supabase CLI). The sample migration adds globally unique sample codes, parent/child lineage, transactional CSV import and splits, task sample scopes, derived ZT counts and RLS. Create Auth users, then insert their `profiles` rows with `admin` or `viewer`. RLS permits all authenticated users to read planning data and only profile-backed admins to modify it.
+Apply the migrations in chronological order, including `202609080001_samples.sql` and `202609290001_task_image_attachments.sql`, in the Supabase SQL editor (or Supabase CLI). The sample migration adds globally unique sample codes, parent/child lineage, transactional CSV import and splits, task sample scopes, derived ZT counts and RLS. The image migration creates private Supabase Storage and task attachment metadata. Create Auth users, then insert their `profiles` rows with `admin` or `viewer`. RLS permits all authenticated users to read planning data and only profile-backed admins to modify it.
 
 To populate non-production data, run [supabase/seed_demo.sql](supabase/seed_demo.sql) after the migrations. It creates explicitly named `DEMO-*` projects, one 24-hour workplace, a dependency chain and an intentional Chamber 2 conflict.
 
@@ -29,5 +29,7 @@ The project detail includes a full task editor: project, workplace, duration, de
 Short-term HMG opens on the current week and supports presets from two weeks through twelve months plus a validated custom range. It uses days for short ranges, weeks for medium ranges and months for longer ranges; both grouping views share the same selected interval and overlap logic.
 
 PLIST PDF embeds the bundled DejaVu Sans Mono Unicode fonts from `assets/fonts/`, so Czech and other European diacritics are rendered independently of the user's device. Branding is optional: place `assets/logo.png`, `assets/logo.jpg`, or `assets/logo.svg` in the deployed application (or configure `PLIST_LOGO_PATH` for PNG/JPEG) and the document header will use it while preserving its proportions.
+
+Task images can be uploaded or removed in task creation/editing (JPG/PNG, up to 10 MB per image). Supabase Storage keeps them private. PLIST numbers one appendix per task in chronological order and places that task's image(s) at the end of the PDF.
 
 Optional demo seed data is intentionally not applied automatically; create it only after real workplace calendars are agreed.

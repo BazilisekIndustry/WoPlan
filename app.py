@@ -4,7 +4,7 @@ from io import StringIO
 import logging
 import streamlit as st
 from models.domain import Dependency, Task, Workplace
-from repositories.planner import create_dependency, create_project, create_sample, create_task, create_workplace, import_project_samples, list_all_workplaces, list_dependencies, list_project_samples, list_projects, list_task_sample_ids, list_tasks, list_workplaces, resolve_task_sample_codes, set_task_samples, set_workplace_active, split_sample, update_sample, update_task_status
+from repositories.planner import create_dependency, create_project, create_sample, create_task, create_workplace, delete_task_attachment, download_task_attachment, import_project_samples, list_all_workplaces, list_dependencies, list_project_samples, list_projects, list_task_attachments, list_task_sample_ids, list_tasks, list_workplaces, resolve_task_sample_codes, set_task_samples, set_workplace_active, split_sample, update_sample, update_task_status, upload_task_attachment
 from repositories.supabase_repo import client, update_schedule_atomically
 from services.calendars import calculate_delay_workdays, calculate_task_end, next_working_day
 from services.capacity import monthly_capacity_hours, planned_hours_in_month
@@ -75,6 +75,8 @@ def render_task_editor(row: dict, *, key_prefix: str) -> None:
     selected_scope = scope_labels[selected_scope_label]
     selected_labels = st.multiselect("Vybrané vzorky", list(sample_choices), default=[label for label, value in sample_choices.items() if value in selected_ids], disabled=selected_scope == "ALL", key=selected_key, help="Hledejte podle kódu; vybírat lze pouze aktivní vzorky tohoto projektu.")
     st.caption(f"ZT (odvozeno): {len(active_samples) if selected_scope == 'ALL' else len(selected_labels)}")
+    attachments = list_task_attachments(db, str(row["id"]))
+    attachment_labels = {f"{item['file_name']} · {item['created_at'][:10]} · {str(item['id'])[:8]}": item for item in attachments}
     with st.form(f"task-editor-{key_prefix}-{row['id']}"):
         left, right = st.columns(2)
         name = left.text_input("Název úkolu *", row["name"])
@@ -85,11 +87,17 @@ def render_task_editor(row: dict, *, key_prefix: str) -> None:
         requested_enabled = right.checkbox("Zadat požadovaný termín dokončení", value=bool(row.get("requested_end")))
         requested_end = right.date_input("Požadovaný termín dokončení", date.fromisoformat(row["requested_end"]) if row.get("requested_end") else date.fromisoformat(row["planned_end"]), disabled=not requested_enabled)
         description = st.text_area("Popis úkolu", row.get("description") or "")
+        new_images = st.file_uploader("Obrázky k úkolu (JPG/PNG, max. 10 MB na obrázek)", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key=f"task-images-{key_prefix}-{row['id']}")
+        remove_images = st.multiselect("Odebrat obrázky", list(attachment_labels), key=f"remove-task-images-{key_prefix}-{row['id']}")
         submitted = st.form_submit_button("Uložit úkol a aktualizovat plán", type="primary")
     if not submitted:
         return
     if not name.strip():
         st.error("Název úkolu je povinný.")
+        return
+    oversized = [image_file.name for image_file in new_images or [] if image_file.size > 10 * 1024 * 1024]
+    if oversized:
+        st.error("Obrázek překračuje limit 10 MB: " + ", ".join(oversized))
         return
     try:
         proposal = revise_task(tasks, dependencies, workplaces, row["id"], int(duration), workplace_options[workplace_label], planned_start)
@@ -106,6 +114,10 @@ def render_task_editor(row: dict, *, key_prefix: str) -> None:
         update_schedule_atomically(db, payload, expected)
         # Association RPC validates project isolation and replaces the selection atomically.
         set_task_samples(db, str(row["id"]), selected_scope, [sample_choices[label] for label in selected_labels])
+        for image_file in new_images or []:
+            upload_task_attachment(db, str(row["id"]), image_file)
+        for label in remove_images:
+            delete_task_attachment(db, attachment_labels[label])
         st.success("Úkol i navazující harmonogram byly aktualizovány.")
         st.rerun()
     except Exception as error:
@@ -429,6 +441,7 @@ elif page == "Projekty":
             st.caption(f"ZT (odvozeno): {len(new_project_samples) if new_scope_label.startswith('Všechny') else len(new_selected_labels)}")
             with st.form("new-task"):
                 name=st.text_input("Název úlohy"); description=st.text_area("Popis úkolu"); work=st.selectbox("Pracoviště",wmap); duration=st.number_input("Délka (pracovní dny)",1,value=1)
+                task_images=st.file_uploader("Obrázky k úkolu (JPG/PNG, max. 10 MB na obrázek)", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="new-task-images")
                 start=st.date_input("Začátek",today); requested_end=st.date_input("Požadovaný termín dokončení", value=None)
                 predecessor_options = {"Bez závislosti": None, **{f"{t['projects']['project_number']} · {t['name']} ({t['planned_end']})": t["id"] for t in task_rows}}
                 predecessor_label = st.selectbox("Navázat na", predecessor_options)
@@ -436,11 +449,15 @@ elif page == "Projekty":
                 offset=st.number_input("Odstup",0,value=3)
                 if st.form_submit_button("Vytvořit úlohu"):
                     try:
+                        oversized = [image_file.name for image_file in task_images or [] if image_file.size > 10 * 1024 * 1024]
+                        if oversized: raise ValueError("Obrázek překračuje limit 10 MB: " + ", ".join(oversized))
                         wp=workplaces[wmap[work]]
                         if predecessor: start=dependency_start(next(t for t in tasks if t.id==predecessor),Dependency(predecessor,"new",int(offset)),wp)
                         start=next_working_day(start,wp)
                         if not name.strip(): raise ValueError("Název úlohy je povinný.")
                         created=create_task(db,{"project_id":pmap[project],"name":name.strip(),"description":description.strip() or None,"workplace_id":wp.id,"duration_workdays":int(duration),"zt_count":0,"sample_scope":"SELECTED","requested_end":requested_end.isoformat() if requested_end else None,"planned_start":start.isoformat(),"planned_end":calculate_task_end(start,int(duration),wp).isoformat(),"created_by":session.user.id,"updated_by":session.user.id})
+                        for image_file in task_images or []:
+                            upload_task_attachment(db, str(created["id"]), image_file)
                         set_task_samples(db, str(created["id"]), "ALL" if new_scope_label.startswith("Všechny") else "SELECTED", [new_sample_choices[label] for label in new_selected_labels])
                         if predecessor: create_dependency(db,{"predecessor_task_id":predecessor,"successor_task_id":created["id"],"offset_workdays":int(offset),"created_by":session.user.id})
                         st.rerun()
@@ -499,7 +516,9 @@ elif page == "Projekty":
         overview_tab.subheader("Požadavkový PLIST")
         overview_tab.caption("Export vždy vychází z aktuálních úkolů projektu a používá stejné chronologické řazení jako HMG.")
         try:
-            pdf = build_plist_pdf(selected, project_rows, task_sample_codes=resolve_task_sample_codes(db, str(selected["id"]), project_rows))
+            task_attachments = {str(row["id"]): list_task_attachments(db, str(row["id"])) for row in project_rows}
+            task_images = {item["id"]: download_task_attachment(db, item) for values in task_attachments.values() for item in values}
+            pdf = build_plist_pdf(selected, project_rows, task_sample_codes=resolve_task_sample_codes(db, str(selected["id"]), project_rows), task_attachments=task_attachments, attachment_images=task_images)
             safe_number = "".join(char if char.isalnum() or char in "-_" else "_" for char in selected["project_number"])
             overview_tab.download_button("Stáhnout PLIST v PDF", pdf, file_name=f"PLIST_{safe_number}.pdf", mime="application/pdf", type="primary")
         except Exception as error:

@@ -74,19 +74,24 @@ def _fmt(value: str | None) -> str:
     return date.fromisoformat(value).strftime("%d.%m.%Y") if value else "-"
 
 
-def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = None, task_sample_codes: dict[str, list[str]] | None = None) -> bytes:
+def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = None, task_sample_codes: dict[str, list[str]] | None = None,
+                    task_attachments: dict[str, list[dict]] | None = None,
+                    attachment_images: dict[str, bytes] | None = None) -> bytes:
     """Create a compact, multi-page PDF suitable for printing and empty projects."""
     try:
         from reportlab.lib import colors
         from reportlab.lib.pagesizes import A4, landscape
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import mm
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
+        from reportlab.lib.utils import ImageReader
     except ImportError as error:  # a useful runtime error for deployments missing the optional renderer
         raise RuntimeError("Pro export PDF nainstalujte závislost reportlab.") from error
 
     created_on = created_on or date.today()
     items = visible_tasks(tasks)
+    task_attachments = task_attachments or {}
+    attachment_images = attachment_images or {}
     regular, bold = _register_unicode_fonts()
     output = BytesIO()
     doc = SimpleDocTemplate(output, pagesize=landscape(A4), leftMargin=12 * mm, rightMargin=12 * mm, topMargin=12 * mm, bottomMargin=12 * mm)
@@ -137,9 +142,31 @@ def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = 
         for index, task in enumerate(items, start=1):
             description = escape(task.get("description") or "Bez popisu")
             codes = ", ".join(task_sample_codes.get(str(task["id"]), [])) or "—"
-            rows.append([Paragraph(str(index), small), Paragraph(f"<b>{escape(task['name'])}</b><br/>{description}", small), Paragraph(escape(codes), small), Paragraph(escape((task.get("workplaces") or {}).get("name") or "Nepřiřazeno"), small), Paragraph(_fmt(task.get("requested_end")), small), Paragraph(str(task.get("zt_count", 0)), small)])
+            task_files = task_attachments.get(str(task["id"]), [])
+            appendix_label = f"Příloha č. {sum(bool(task_attachments.get(str(previous['id']), [])) for previous in items[:index])}" if task_files else "—"
+            appendix_text = f"Přílohy - A - {appendix_label}" if task_files else "Přílohy - N -"
+            rows.append([Paragraph(str(index), small), Paragraph(f"<b>{escape(task['name'])}</b><br/>{description}<br/><b>{appendix_text}</b>", small), Paragraph(escape(codes), small), Paragraph(escape((task.get("workplaces") or {}).get("name") or "Nepřiřazeno"), small), Paragraph(_fmt(task.get("requested_end")), small), Paragraph(str(task.get("zt_count", 0)), small)])
         table = Table(rows, colWidths=[9 * mm, 74 * mm, 84 * mm, 37 * mm, 37 * mm, 10 * mm], repeatRows=1)
         table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#60A2D4")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), .25, colors.HexColor("#BBCBD3")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F8F9")]), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
         story.append(table)
+    appendix_number = 0
+    for task in items:
+        task_files = task_attachments.get(str(task["id"]), [])
+        if not task_files:
+            continue
+        appendix_number += 1
+        story.append(PageBreak())
+        story.append(Paragraph(f"Příloha č. {appendix_number} – {escape(task['name'])}", heading))
+        for attachment in task_files:
+            image_data = attachment_images.get(str(attachment["id"]))
+            if not image_data:
+                continue
+            try:
+                reader = ImageReader(BytesIO(image_data))
+                width, height = reader.getSize()
+                scale = min(250 * mm / width, 165 * mm / height, 1)
+                story.append(KeepTogether([Spacer(1, 3 * mm), Image(BytesIO(image_data), width=width * scale, height=height * scale)]))
+            except Exception as error:
+                raise RuntimeError(f"Obrázek {attachment.get('file_name', '')} se nepodařilo vložit do PDF.") from error
     doc.build(story)
     return output.getvalue()

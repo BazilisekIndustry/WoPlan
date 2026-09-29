@@ -100,3 +100,39 @@ def resolve_task_sample_codes(db: Client, project_id: str, tasks: list[dict]) ->
             rows = db.table("task_samples").select("samples(code)").eq("task_id", task["id"]).execute().data
             result[str(task["id"])] = sorted(row["samples"]["code"] for row in rows if row.get("samples"))
     return result
+
+
+def list_task_attachments(db: Client, task_id: str) -> list[dict]:
+    return (db.table("task_attachments").select("*").eq("task_id", task_id)
+            .order("created_at").order("id").execute().data)
+
+
+def upload_task_attachment(db: Client, task_id: str, uploaded_file) -> dict:
+    """Store an image in the private Supabase bucket and register its metadata."""
+    from uuid import uuid4
+    from pathlib import PurePath
+
+    suffix = ".png" if uploaded_file.type == "image/png" else ".jpg"
+    attachment_id = str(uuid4())
+    storage_path = f"{task_id}/{attachment_id}{suffix}"
+    db.storage.from_("task-attachments").upload(
+        storage_path, uploaded_file.getvalue(),
+        {"content-type": uploaded_file.type, "upsert": "false"},
+    )
+    try:
+        return db.table("task_attachments").insert({
+            "id": attachment_id, "task_id": task_id, "storage_path": storage_path,
+            "file_name": PurePath(uploaded_file.name).name, "content_type": uploaded_file.type,
+        }).execute().data[0]
+    except Exception:
+        db.storage.from_("task-attachments").remove([storage_path])
+        raise
+
+
+def delete_task_attachment(db: Client, attachment: dict) -> None:
+    db.table("task_attachments").delete().eq("id", attachment["id"]).execute()
+    db.storage.from_("task-attachments").remove([attachment["storage_path"]])
+
+
+def download_task_attachment(db: Client, attachment: dict) -> bytes:
+    return db.storage.from_("task-attachments").download(attachment["storage_path"])

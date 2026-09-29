@@ -18,6 +18,13 @@ from services.views import group_by_project, group_by_workplace, interval_bounds
 st.set_page_config(page_title="Project Planner", layout="wide")
 logger = logging.getLogger(__name__)
 
+def display_date(value) -> str:
+    """Format dates consistently for the Czech UI while keeping ISO in storage."""
+    if not value:
+        return "—"
+    day = value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+    return day.strftime("%d.%m.%Y")
+
 def streamlit_secret(name: str) -> str | None:
     try:
         return st.secrets.get(name)
@@ -83,9 +90,9 @@ def render_task_editor(row: dict, *, key_prefix: str) -> None:
         project_label = left.selectbox("Projekt *", list(project_options), index=list(project_options).index(current_project))
         workplace_label = left.selectbox("Pracoviště *", list(workplace_options), index=list(workplace_options).index(current_workplace))
         duration = left.number_input("Délka (pracovní dny) *", min_value=1, value=int(row["duration_workdays"]))
-        planned_start = right.date_input("Plánovaný začátek *", date.fromisoformat(row["planned_start"]))
+        planned_start = right.date_input("Plánovaný začátek *", date.fromisoformat(row["planned_start"]), format="DD.MM.YYYY")
         requested_enabled = right.checkbox("Zadat požadovaný termín dokončení", value=bool(row.get("requested_end")))
-        requested_end = right.date_input("Požadovaný termín dokončení", date.fromisoformat(row["requested_end"]) if row.get("requested_end") else date.fromisoformat(row["planned_end"]), disabled=not requested_enabled)
+        requested_end = right.date_input("Požadovaný termín dokončení", date.fromisoformat(row["requested_end"]) if row.get("requested_end") else date.fromisoformat(row["planned_end"]), disabled=not requested_enabled, format="DD.MM.YYYY")
         description = st.text_area("Popis úkolu", row.get("description") or "")
         new_images = st.file_uploader("Obrázky k úkolu (JPG/PNG, max. 10 MB na obrázek)", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key=f"task-images-{key_prefix}-{row['id']}")
         remove_images = st.multiselect("Odebrat obrázky", list(attachment_labels), key=f"remove-task-images-{key_prefix}-{row['id']}")
@@ -212,7 +219,7 @@ def render_samples_module() -> None:
         if role == "admin" and detail["status"] == "active":
             selectable_tasks = [row for row in task_rows if str(row["project_id"]) == selected_project_id and row.get("sample_scope") != "ALL"]
             if selectable_tasks:
-                task_options = {f"{row['name']} ({row['planned_start']})": row for row in selectable_tasks}
+                task_options = {f"{row['name']} ({display_date(row['planned_start'])})": row for row in selectable_tasks}
                 task_label = st.selectbox("Přiřadit k úkolu", list(task_options), key=f"assign-task-{detail['id']}")
                 if st.button("Přiřadit vzorek", key=f"assign-confirm-{detail['id']}"):
                     try:
@@ -304,7 +311,7 @@ if page == "Dashboard":
     st.subheader("Týdenní přehled")
     week_controls = st.columns([1, 2, 1, 4])
     week_controls[0].button("← Předchozí týden", on_click=shift_dashboard_week, args=(-7,))
-    chosen_day = week_controls[1].date_input("Týden od", value=st.session_state.get("dashboard_week", today), key="dashboard_week")
+    chosen_day = week_controls[1].date_input("Týden od", value=st.session_state.get("dashboard_week", today), key="dashboard_week", format="DD.MM.YYYY")
     week_start = chosen_day - timedelta(days=chosen_day.weekday())
     week_end = week_start + timedelta(days=6)
     week_controls[2].button("Další týden →", on_click=shift_dashboard_week, args=(7,))
@@ -318,8 +325,8 @@ if page == "Dashboard":
                 st.dataframe([{
                     "Úkol": row["name"],
                     "Projekt": (row.get("projects") or {}).get("project_number") or "—",
-                    "Start": row.get("planned_start") or "—",
-                    "Konec": row.get("planned_end") or "—",
+                    "Start": display_date(row.get("planned_start")),
+                    "Konec": display_date(row.get("planned_end")),
                     "Stav": row["status"],
                     "Upozornění": "⚠️ zpožděno" if date.fromisoformat(row["planned_end"]) < today and row["status"] not in {"completed", "cancelled"} else ("⚠️ kolize" if str(row["id"]) in conflict_ids else "—"),
                 } for row in workplace_tasks], hide_index=True, use_container_width=True)
@@ -330,7 +337,7 @@ if page == "Dashboard":
                 "Úkol": task.name,
                 "Projekt": next((project["project_number"] for project in projects if project["id"] == task.project_id), "—"),
                 "Pracoviště": workplaces.get(task.workplace_id).name if workplaces.get(task.workplace_id) else "—",
-                "Plánovaný konec": task.planned_end.isoformat(),
+                "Plánovaný konec": display_date(task.planned_end),
                 "Zpoždění": f"{calculate_delay_workdays(task.planned_end, today, workplaces[task.workplace_id])} prac. d" if task.workplace_id in workplaces else "—",
                 "Stav": task.status,
             } for task in sorted(delayed, key=lambda item: item.planned_end)], hide_index=True, use_container_width=True)
@@ -342,8 +349,8 @@ elif page == "Krátkodobý HMG":
     preset = st.selectbox("Období", ["Aktuální týden", "Následující 2 týdny", "Aktuální měsíc", "Následující měsíc", "3 měsíce", "6 měsíců", "12 měsíců", "Vlastní rozsah"])
     if preset == "Vlastní rozsah":
         range_a, range_b = st.columns(2)
-        range_start = range_a.date_input("Od", value=st.session_state.get("hmg_custom_start", week_start), min_value=week_start, max_value=limit, key="hmg_custom_start")
-        range_end = range_b.date_input("Do", value=st.session_state.get("hmg_custom_end", min(week_start + timedelta(days=6), limit)), min_value=week_start, max_value=limit, key="hmg_custom_end")
+        range_start = range_a.date_input("Od", value=st.session_state.get("hmg_custom_start", week_start), min_value=week_start, max_value=limit, key="hmg_custom_start", format="DD.MM.YYYY")
+        range_end = range_b.date_input("Do", value=st.session_state.get("hmg_custom_end", min(week_start + timedelta(days=6), limit)), min_value=week_start, max_value=limit, key="hmg_custom_end", format="DD.MM.YYYY")
     else:
         if preset == "Aktuální týden": range_start, range_end = week_start, week_start + timedelta(days=6)
         elif preset == "Následující 2 týdny": range_start, range_end = week_start, week_start + timedelta(days=13)
@@ -394,7 +401,7 @@ elif page == "Krátkodobý HMG":
                 with action_c.expander("Přesunout v čase"):
                     moving_task = next(task for task in tasks if task.id == row["id"])
                     suggested_start = first_available_start(moving_task, task_start, workplaces[row["workplace_id"]], tasks)
-                    new_start = st.date_input("Nový start", suggested_start, key=f"move-date-{row['id']}")
+                    new_start = st.date_input("Nový start", suggested_start, key=f"move-date-{row['id']}", format="DD.MM.YYYY")
                     if suggested_start != task_start: st.caption(f"První volný termín na pracovišti: {suggested_start:%d.%m.%Y}")
                     if new_start != task_start and st.button("Použít přesun", key=f"apply-{row['id']}"):
                         try:
@@ -425,7 +432,7 @@ elif page == "Projekty":
     if role == "admin":
         with st.expander("+ Nový projekt"):
             with st.form("new-project"):
-                number=st.text_input("Číslo projektu"); name=st.text_input("Název"); description=st.text_area("Popis"); deadline=st.date_input("Plánované dokončení",value=None)
+                number=st.text_input("Číslo projektu"); name=st.text_input("Název"); description=st.text_area("Popis"); deadline=st.date_input("Plánované dokončení",value=None, format="DD.MM.YYYY")
                 if st.form_submit_button("Vytvořit"):
                     try: create_project(db,{"project_number":number,"name":name,"description":description or None,"planned_end":deadline.isoformat() if deadline else None,"created_by":session.user.id,"updated_by":session.user.id}); st.rerun()
                     except Exception as error: fail(error)
@@ -442,8 +449,8 @@ elif page == "Projekty":
             with st.form("new-task"):
                 name=st.text_input("Název úlohy"); description=st.text_area("Popis úkolu"); work=st.selectbox("Pracoviště",wmap); duration=st.number_input("Délka (pracovní dny)",1,value=1)
                 task_images=st.file_uploader("Obrázky k úkolu (JPG/PNG, max. 10 MB na obrázek)", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="new-task-images")
-                start=st.date_input("Začátek",today); requested_end=st.date_input("Požadovaný termín dokončení", value=None)
-                predecessor_options = {"Bez závislosti": None, **{f"{t['projects']['project_number']} · {t['name']} ({t['planned_end']})": t["id"] for t in task_rows}}
+                start=st.date_input("Začátek",today, format="DD.MM.YYYY"); requested_end=st.date_input("Požadovaný termín dokončení", value=None, format="DD.MM.YYYY")
+                predecessor_options = {"Bez závislosti": None, **{f"{t['projects']['project_number']} · {t['name']} ({display_date(t['planned_end'])})": t["id"] for t in task_rows}}
                 predecessor_label = st.selectbox("Navázat na", predecessor_options)
                 predecessor = predecessor_options[predecessor_label]
                 offset=st.number_input("Odstup",0,value=3)
@@ -477,7 +484,7 @@ elif page == "Projekty":
         completed = sum(task.status == "completed" for task in project_tasks_for_list)
         progress = f"{round(100 * completed / len(project_tasks_for_list))}%" if project_tasks_for_list else "—"
         is_late = bool(project.get("planned_end") and expected_end and expected_end.isoformat() > project["planned_end"])
-        project_list_rows.append({"Projekt": project["project_number"], "Název": project["name"], "Stav": project["status"], "Plánovaný konec": project.get("planned_end") or "—", "Očekávaný konec": expected_end.isoformat() if expected_end else "—", "Postup": progress, "Riziko": "⚠️ zpoždění" if is_late else "—"})
+        project_list_rows.append({"Projekt": project["project_number"], "Název": project["name"], "Stav": project["status"], "Plánovaný konec": display_date(project.get("planned_end")), "Očekávaný konec": display_date(expected_end), "Postup": progress, "Riziko": "⚠️ zpoždění" if is_late else "—"})
     st.dataframe(project_list_rows, hide_index=True, use_container_width=True)
     if visible_projects:
         selected_number = st.selectbox("Otevřít projekt", [p["project_number"] for p in visible_projects])
@@ -486,7 +493,7 @@ elif page == "Projekty":
         st.subheader(f"{selected['project_number']} – {selected['name']}")
         if selected.get("description"): st.caption(selected["description"])
         current_end = current_project_end(project_tasks)
-        x, y, z = st.columns(3); x.metric("Plánovaný termín", selected.get("planned_end") or "—"); y.metric("Aktuální konec", current_end.isoformat() if current_end else "—")
+        x, y, z = st.columns(3); x.metric("Plánovaný termín", display_date(selected.get("planned_end"))); y.metric("Aktuální konec", display_date(current_end))
         if current_end and selected.get("planned_end"):
             deadline = date.fromisoformat(selected["planned_end"]); delay = project_deadline_delay(project_tasks, deadline, workplaces)
             z.metric("Zpoždění projektu", f"{delay} pracovních dnů" if delay else "V termínu")
@@ -499,17 +506,17 @@ elif page == "Projekty":
         with overview_tab:
             overview_tab.caption("Termín, aktuální očekávaný konec, riziko a vzorky jsou shrnuty nad kartami.")
         project_rows = visible_tasks([row for row in task_rows if row["project_id"] == selected["id"]])
-        task_tab.dataframe([{"Úloha":row["name"],"Popis":row.get("description") or "—","Pracoviště":(row.get("workplaces") or {}).get("name") or "—","Start":row["planned_start"],"Konec":row["planned_end"],"Požadovaný termín":row.get("requested_end") or "—","ZT":row["zt_count"],"Stav":row["status"]} for row in project_rows],hide_index=True,use_container_width=True)
+        task_tab.dataframe([{"Úloha":row["name"],"Popis":row.get("description") or "—","Pracoviště":(row.get("workplaces") or {}).get("name") or "—","Start":display_date(row["planned_start"]),"Konec":display_date(row["planned_end"]),"Požadovaný termín":display_date(row.get("requested_end")) if row.get("requested_end") else "—","ZT":row["zt_count"],"Stav":row["status"]} for row in project_rows],hide_index=True,use_container_width=True)
         if role == "admin":
             task_tab.subheader("Upravit existující úkol")
             if project_rows:
-                task_label = task_tab.selectbox("Úkol k úpravě", [f"{row['name']} ({row['planned_start']})" for row in project_rows])
-                editable = project_rows[[f"{row['name']} ({row['planned_start']})" for row in project_rows].index(task_label)]
+                task_label = task_tab.selectbox("Úkol k úpravě", [f"{row['name']} ({display_date(row['planned_start'])})" for row in project_rows])
+                editable = project_rows[[f"{row['name']} ({display_date(row['planned_start'])})" for row in project_rows].index(task_label)]
                 with task_tab.expander("Detail a editace úkolu", expanded=True):
                     render_task_editor(editable, key_prefix="project")
             else:
                 task_tab.info("Projekt zatím nemá žádné úkoly k úpravě.")
-        hmg_tab.dataframe([{"Úkol": row["name"], "Start": row["planned_start"], "Konec": row["planned_end"], "Stav": row["status"]} for row in project_rows], hide_index=True, use_container_width=True)
+        hmg_tab.dataframe([{"Úkol": row["name"], "Start": display_date(row["planned_start"]), "Konec": display_date(row["planned_end"]), "Stav": row["status"]} for row in project_rows], hide_index=True, use_container_width=True)
         project_task_ids = {str(row["id"]) for row in project_rows}
         project_dependencies = [dependency for dependency in dependency_rows if str(dependency["predecessor_task_id"]) in project_task_ids or str(dependency["successor_task_id"]) in project_task_ids]
         dependency_tab.dataframe(project_dependencies or [{"Informace": "Projekt nemá evidované závislosti."}], hide_index=True, use_container_width=True)

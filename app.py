@@ -316,11 +316,11 @@ if page == "Dashboard":
     week_end = week_start + timedelta(days=6)
     week_controls[2].button("Další týden →", on_click=shift_dashboard_week, args=(7,))
     week_controls[3].caption(f"{week_start:%d.%m.%Y} – {week_end:%d.%m.%Y}")
-    weekly_tasks = visible_tasks(task_rows, start=week_start, end=week_end)
+    weekly_tasks = visible_tasks(task_rows, start=week_start, end=week_end, dependencies=dependency_rows)
     if not weekly_tasks:
         st.info("V tomto týdnu nejsou naplánované žádné aktivní úlohy.")
     else:
-        for workplace_name, workplace_tasks in group_by_workplace(weekly_tasks):
+        for workplace_name, workplace_tasks in group_by_workplace(weekly_tasks, dependency_rows):
             with st.expander(f"{workplace_name} · {len(workplace_tasks)} úkolů", expanded=True):
                 st.dataframe([{
                     "Úkol": row["name"],
@@ -372,9 +372,9 @@ elif page == "Krátkodobý HMG":
         st.stop()
     scale, buckets = short_term_buckets(range_start, range_end)
     project_filter = st.selectbox("Projekt", ["Vše"] + [p["project_number"] for p in projects]); workplace_filter = st.selectbox("Pracoviště", ["Vše"] + [w.name for w in workplaces.values()]); status_filter = st.selectbox("Stav", ["Vše", "planned", "in_progress", "completed"])
-    filtered = visible_tasks(task_rows, start=range_start, end=range_end, project_id=next((p["id"] for p in projects if p["project_number"] == project_filter), None), workplace_id=next((w.id for w in workplaces.values() if w.name == workplace_filter), None), status=None if status_filter == "Vše" else status_filter)
+    filtered = visible_tasks(task_rows, start=range_start, end=range_end, project_id=next((p["id"] for p in projects if p["project_number"] == project_filter), None), workplace_id=next((w.id for w in workplaces.values() if w.name == workplace_filter), None), status=None if status_filter == "Vše" else status_filter, dependencies=dependency_rows)
     view = st.radio("Zobrazit", ["Podle pracovišť", "Podle projektů"], horizontal=True, label_visibility="collapsed")
-    groups = group_by_workplace(filtered) if view == "Podle pracovišť" else group_by_project(filtered)
+    groups = group_by_workplace(filtered, dependency_rows) if view == "Podle pracovišť" else group_by_project(filtered, dependency_rows)
     if not groups:
         st.info("Ve zvoleném období a filtrech nejsou žádné aktivní úkoly.")
     header = st.columns([2.8] + [1] * len(buckets)); header[0].markdown("**Úkol / projekt / pracoviště**")
@@ -505,7 +505,7 @@ elif page == "Projekty":
         overview_tab, task_tab, hmg_tab, dependency_tab = st.tabs(["Přehled", "Úkoly", "HMG", "Závislosti"])
         with overview_tab:
             overview_tab.caption("Termín, aktuální očekávaný konec, riziko a vzorky jsou shrnuty nad kartami.")
-        project_rows = visible_tasks([row for row in task_rows if row["project_id"] == selected["id"]])
+        project_rows = visible_tasks([row for row in task_rows if row["project_id"] == selected["id"]], dependencies=dependency_rows)
         task_tab.dataframe([{"Úloha":row["name"],"Popis":row.get("description") or "—","Pracoviště":(row.get("workplaces") or {}).get("name") or "—","Start":display_date(row["planned_start"]),"Konec":display_date(row["planned_end"]),"Požadovaný termín":display_date(row.get("requested_end")) if row.get("requested_end") else "—","ZT":row["zt_count"],"Stav":row["status"]} for row in project_rows],hide_index=True,use_container_width=True)
         if role == "admin":
             task_tab.subheader("Upravit existující úkol")
@@ -525,7 +525,7 @@ elif page == "Projekty":
         try:
             task_attachments = {str(row["id"]): list_task_attachments(db, str(row["id"])) for row in project_rows}
             task_images = {item["id"]: download_task_attachment(db, item) for values in task_attachments.values() for item in values}
-            pdf = build_plist_pdf(selected, project_rows, task_sample_codes=resolve_task_sample_codes(db, str(selected["id"]), project_rows), task_attachments=task_attachments, attachment_images=task_images)
+            pdf = build_plist_pdf(selected, project_rows, task_sample_codes=resolve_task_sample_codes(db, str(selected["id"]), project_rows), task_attachments=task_attachments, attachment_images=task_images, dependencies=dependency_rows)
             safe_number = "".join(char if char.isalnum() or char in "-_" else "_" for char in selected["project_number"])
             overview_tab.download_button("Stáhnout PLIST v PDF", pdf, file_name=f"PLIST_{safe_number}.pdf", mime="application/pdf", type="primary")
         except Exception as error:

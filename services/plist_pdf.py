@@ -76,7 +76,8 @@ def _fmt(value: str | None) -> str:
 
 def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = None, task_sample_codes: dict[str, list[str]] | None = None,
                     task_attachments: dict[str, list[dict]] | None = None,
-                    attachment_images: dict[str, bytes] | None = None) -> bytes:
+                    attachment_images: dict[str, bytes] | None = None,
+                    dependencies: list[dict] | None = None) -> bytes:
     """Create a compact, multi-page PDF suitable for printing and empty projects."""
     try:
         from reportlab.lib import colors
@@ -89,7 +90,7 @@ def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = 
         raise RuntimeError("Pro export PDF nainstalujte závislost reportlab.") from error
 
     created_on = created_on or date.today()
-    items = visible_tasks(tasks)
+    items = visible_tasks(tasks, dependencies=dependencies or ())
     task_attachments = task_attachments or {}
     attachment_images = attachment_images or {}
     regular, bold = _register_unicode_fonts()

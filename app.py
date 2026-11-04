@@ -212,6 +212,17 @@ def render_samples_module() -> None:
         st.caption(f"Projekt: {selected_project['project_number']} · Typ: {detail.get('type') or '—'} · Stav: {detail['status']}")
         if detail.get("description"): st.write(detail["description"])
         st.caption(f"Rodič: {(detail.get('parent') or {}).get('code') or '—'}")
+        if role == "admin":
+            with st.form(f"edit-sample-{detail['id']}"):
+                edited_code = st.text_input("Kód vzorku", value=detail["code"], disabled=detail["status"] == "split")
+                edited_description = st.text_input("Popis", value=detail.get("description") or "")
+                edited_type = st.text_input("Typ", value=detail.get("type") or "")
+                if st.form_submit_button("Uložit změny"):
+                    try:
+                        if not edited_code.strip(): raise ValueError("Kód vzorku je povinný.")
+                        update_sample(db, str(detail["id"]), {"code": edited_code.strip(), "description": edited_description.strip() or None, "type": edited_type.strip() or None, "updated_by": session.user.id})
+                        st.rerun()
+                    except Exception as error: fail(error)
         related = db.table("task_samples").select("task_id").eq("sample_id", detail["id"]).execute().data
         related_ids = {str(row["task_id"]) for row in related}
         related_tasks = [row for row in task_rows if str(row["id"]) in related_ids]

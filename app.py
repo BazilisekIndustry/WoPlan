@@ -225,7 +225,9 @@ def render_samples_module() -> None:
                     except Exception as error: fail(error)
         related = db.table("task_samples").select("task_id").eq("sample_id", detail["id"]).execute().data
         related_ids = {str(row["task_id"]) for row in related}
-        related_tasks = [row for row in task_rows if str(row["id"]) in related_ids]
+        related_tasks = [row for row in task_rows if str(row["id"]) in related_ids or (
+            detail["status"] == "active" and str(row["project_id"]) == selected_project_id and row.get("sample_scope") == "ALL"
+        )]
         st.caption("Použito v úkolech: " + (", ".join(row["name"] for row in related_tasks) or "—"))
         if role == "admin" and detail["status"] == "active":
             selectable_tasks = [row for row in task_rows if str(row["project_id"]) == selected_project_id and row.get("sample_scope") != "ALL"]

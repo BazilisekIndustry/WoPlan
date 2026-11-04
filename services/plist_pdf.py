@@ -147,7 +147,7 @@ def build_plist_pdf(project: dict, tasks: list[dict], created_on: date | None = 
             appendix_label = f"Příloha č. {sum(bool(task_attachments.get(str(previous['id']), [])) for previous in items[:index])}" if task_files else "—"
             appendix_text = f"Přílohy - A - {appendix_label}" if task_files else "Přílohy - N -"
             rows.append([Paragraph(str(index), small), Paragraph(f"<b>{escape(task['name'])}</b><br/>{description}<br/><b>{appendix_text}</b>", small), Paragraph(escape(codes), small), Paragraph(escape((task.get("workplaces") or {}).get("name") or "Nepřiřazeno"), small), Paragraph(_fmt(task.get("requested_end")), small), Paragraph(str(task.get("zt_count", 0)), small)])
-        table = Table(rows, colWidths=[9 * mm, 74 * mm, 84 * mm, 37 * mm, 37 * mm, 10 * mm], repeatRows=1)
+        table = Table(rows, colWidths=[9 * mm, 130.75 * mm, 18.5 * mm, 37 * mm, 27.75 * mm, 10 * mm], repeatRows=1)
         table.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#60A2D4")), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("GRID", (0, 0), (-1, -1), .25, colors.HexColor("#BBCBD3")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F8F9")]), ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4)]))
         story.append(table)
     appendix_number = 0
